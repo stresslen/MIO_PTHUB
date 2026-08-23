@@ -12,6 +12,7 @@ from app.pipeline.normalize import (
     parse_datetime,
     extract_location,
     extract_contact_info,
+    normalize_phone_numbers,
 )
 
 logger = logging.getLogger(__name__)
@@ -353,6 +354,7 @@ Không yêu cầu search chỉ vì thiếu email, số điện thoại hoặc ng
         organization = str(cleaned.get("organization_name") or "").strip()
         if organization.lower() in {"", "đang cập nhật", "không rõ", "n/a", "null"}:
             cleaned["organization_name"] = self._extract_org_name(title, text)
+        cleaned["contact_phone"] = normalize_phone_numbers(cleaned.get("contact_phone"))
         return cleaned
 
     def _extract_gemini(self, title: str, text: str, source: str = "") -> AIExtractionResult:

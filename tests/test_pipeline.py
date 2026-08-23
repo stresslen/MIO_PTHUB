@@ -6,6 +6,7 @@ from app.pipeline.normalize import (
     parse_datetime,
     extract_location,
     extract_contact_info,
+    normalize_phone_numbers,
     canonicalize_url,
 )
 from app.pipeline.dedup import compute_fingerprint
@@ -67,6 +68,13 @@ def test_extract_contact_info():
     assert email == "contact@dauthau.gov.vn"
     assert phone == "0912345678"
     assert name is not None
+
+
+def test_normalize_vietnamese_phone_numbers():
+    assert normalize_phone_numbers("826891248") == "0826891248"
+    assert normalize_phone_numbers("+84 28 3773 1666 (ext. 2245)") == "02837731666 máy lẻ 2245"
+    assert normalize_phone_numbers("0904.634.288, 024.8888.4288") == "0904634288; 02488884288"
+    assert normalize_phone_numbers("#ERROR!") is None
 
 
 def test_canonicalize_url():

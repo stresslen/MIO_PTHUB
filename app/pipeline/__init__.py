@@ -5,6 +5,7 @@ from app.pipeline.normalize import (
     parse_datetime,
     extract_location,
     extract_contact_info,
+    normalize_phone_numbers,
     canonicalize_url,
 )
 from app.pipeline.dedup import (
@@ -32,6 +33,7 @@ __all__ = [
     "parse_datetime",
     "extract_location",
     "extract_contact_info",
+    "normalize_phone_numbers",
     "canonicalize_url",
     "compute_fingerprint",
     "is_duplicate",

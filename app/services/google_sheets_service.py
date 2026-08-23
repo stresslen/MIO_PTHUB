@@ -9,6 +9,7 @@ import logging
 from typing import Any
 
 from app.config import settings
+from app.pipeline.normalize import normalize_phone_numbers
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,7 @@ class GoogleSheetsService:
 
     def __init__(self) -> None:
         self._spreadsheet = None
+        self._text_formatted_worksheets: set[int] = set()
         self.last_error: str | None = None
 
     @property
@@ -99,7 +101,20 @@ class GoogleSheetsService:
             first_row = worksheet.row_values(1)
         if first_row != headers:
             worksheet.update(values=[headers], range_name="A1")
+        if headers == LEAD_HEADERS and worksheet.id not in self._text_formatted_worksheets:
+            worksheet.format("P2:P", {"numberFormat": {"type": "TEXT"}})
+            self._text_formatted_worksheets.add(worksheet.id)
         return worksheet
+
+    def _lead_row(self, lead: Any) -> list[Any]:
+        return [
+            self._cell_value(
+                normalize_phone_numbers(getattr(lead, name, None))
+                if name == "contact_phone"
+                else getattr(lead, name, None)
+            )
+            for name in LEAD_HEADERS
+        ]
 
     @staticmethod
     def _cell_value(value: Any) -> Any:
@@ -118,7 +133,7 @@ class GoogleSheetsService:
             return False
         try:
             worksheet = self._worksheet(settings.google_sheets_leads_worksheet, LEAD_HEADERS)
-            row = [self._cell_value(getattr(lead, name, None)) for name in LEAD_HEADERS]
+            row = self._lead_row(lead)
             ids = worksheet.col_values(1)
             try:
                 row_number = ids.index(str(lead.id)) + 1
@@ -152,7 +167,7 @@ class GoogleSheetsService:
             }
             leads = db.query(Lead).order_by(Lead.crawled_at.asc()).all()
             missing_rows = [
-                [self._cell_value(getattr(lead, name, None)) for name in LEAD_HEADERS]
+                self._lead_row(lead)
                 for lead in leads
                 if str(lead.id) not in existing_ids
             ]
@@ -221,6 +236,8 @@ class GoogleSheetsService:
                         values[field] = int(float(value))
                     elif field in {"budget_value", "relevance"}:
                         values[field] = float(value)
+                    elif field == "contact_phone":
+                        values[field] = normalize_phone_numbers(value)
                     else:
                         values[field] = value
                 if not values.get("id"):

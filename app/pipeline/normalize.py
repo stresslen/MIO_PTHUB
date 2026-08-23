@@ -227,6 +227,44 @@ def extract_location(text: Optional[str]) -> Optional[str]:
     return None
 
 
+
+def normalize_phone_numbers(value: object) -> Optional[str]:
+    """Normalize Vietnamese phone numbers to text-safe domestic 0-prefixed form."""
+    if value is None:
+        return None
+    if isinstance(value, float) and value.is_integer():
+        text = str(int(value))
+    else:
+        text = str(value).strip()
+    if not text or text.upper() in {"#ERROR!", "ERROR", "N/A", "NULL", "NONE"}:
+        return None
+
+    normalized: list[str] = []
+    for part in re.split(r"[,;/\n]+|\s+hoặc\s+", text, flags=re.IGNORECASE):
+        extension_match = re.search(r"(?:ext\.?|máy\s*lẻ)\s*[:.]?\s*(\d+)", part, re.IGNORECASE)
+        extension = extension_match.group(1) if extension_match else None
+        if extension_match:
+            part = part[:extension_match.start()]
+        digits = re.sub(r"\D", "", part)
+        if digits.startswith("0084"):
+            digits = "0" + digits[4:]
+        elif digits.startswith("84"):
+            digits = "0" + digits[2:]
+        elif not digits.startswith("0"):
+            if len(digits) == 9 and digits[0] in "35789":
+                digits = "0" + digits
+            elif len(digits) == 10 and digits.startswith("2"):
+                digits = "0" + digits
+
+        valid_mobile = len(digits) == 10 and re.fullmatch(r"0[35789]\d{8}", digits)
+        valid_landline = len(digits) == 11 and re.fullmatch(r"02\d{9}", digits)
+        if not (valid_mobile or valid_landline):
+            continue
+        result = digits + (f" máy lẻ {extension}" if extension else "")
+        if result not in normalized:
+            normalized.append(result)
+    return "; ".join(normalized) or None
+
 def extract_contact_info(text: Optional[str]) -> Tuple[Optional[str], Optional[str], Optional[str]]:
     """Extract contact name, email, and phone number from text."""
     if not text:
@@ -237,8 +275,8 @@ def extract_contact_info(text: Optional[str]) -> Tuple[Optional[str], Optional[s
     email = email_match.group(0) if email_match else None
 
     # Phone extraction (Vietnamese mobile & landline patterns)
-    phone_match = re.search(r"(?:(?:\+84|0)[235789]\d{8}|02\d{9})", re.sub(r"[\s.-]", "", text))
-    phone = phone_match.group(0) if phone_match else None
+    phone_match = re.search(r"(?:\+84|0)(?:[35789]\d{8}|2\d{9})", re.sub(r"[\s.-]", "", text))
+    phone = normalize_phone_numbers(phone_match.group(0)) if phone_match else None
 
     # Contact Name heuristic
     name = None

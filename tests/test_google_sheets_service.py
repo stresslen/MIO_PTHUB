@@ -9,8 +9,10 @@ from app.services.google_sheets_service import (
 
 class FakeWorksheet:
     def __init__(self):
+        self.id = 0
         self.headers = []
         self.appended = []
+        self.formatted = []
 
     def row_values(self, row):
         return self.headers if row == 1 else []
@@ -26,6 +28,9 @@ class FakeWorksheet:
     def append_rows(self, rows, value_input_option):
         assert value_input_option == "RAW"
         self.appended.extend(rows)
+
+    def format(self, cell_range, cell_format):
+        self.formatted.append((cell_range, cell_format))
 
 
 class FakeSpreadsheet:
@@ -73,9 +78,13 @@ def test_sync_sqlite_targets_gid_zero_and_appends_only_missing(monkeypatch):
     spreadsheet = FakeSpreadsheet(worksheet)
     monkeypatch.setattr(service, "connect", lambda: spreadsheet)
 
-    synced = service.sync_sqlite(FakeDb([make_lead("existing-id"), make_lead("new-id")]))
+    new_lead = make_lead("new-id")
+    new_lead.contact_phone = 826891248
+    synced = service.sync_sqlite(FakeDb([make_lead("existing-id"), new_lead]))
 
     assert synced == 1
     assert spreadsheet.requested_gid == 0
     assert worksheet.headers == LEAD_HEADERS
     assert worksheet.appended[0][0] == "new-id"
+    assert worksheet.appended[0][LEAD_HEADERS.index("contact_phone")] == "0826891248"
+    assert worksheet.formatted == [("P2:P", {"numberFormat": {"type": "TEXT"}})]
