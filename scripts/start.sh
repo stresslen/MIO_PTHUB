@@ -34,10 +34,6 @@ $PYTHON_BIN -c "from app.database import init_db; init_db();"
 LEAD_COUNT=$($PYTHON_BIN -c "from app.database import SessionLocal; from app.models.lead import Lead; db=SessionLocal(); print(db.query(Lead).count()); db.close()")
 echo "[*] Dữ liệu hiện có trong Database: $LEAD_COUNT leads (Dữ liệu được bảo toàn)"
 
-if [ "$LEAD_COUNT" -eq 0 ]; then
-    echo "[*] Database đang trống. Hệ thống sẽ tự động cào khởi tạo ngầm 1 tháng qua khi khởi động."
-fi
-
 # 3. Start FastAPI Server & Automated Daily Scheduler
 echo "======================================================================"
 echo "🌟 Web Dashboard: http://127.0.0.1:8000"

@@ -7,8 +7,6 @@ from typing import Any, Dict, Optional
 from zoneinfo import ZoneInfo
 
 from app.config import settings
-from app.database import SessionLocal
-from app.models.lead import Lead
 from app.pipeline.normalize import utc_now
 from app.services.crawler_service import crawler_service
 from app.services.google_sheets_service import google_sheets_service
@@ -28,7 +26,6 @@ class SchedulerService:
         self.minute = settings.scheduler_minute
         self.timeframe = "1_day"
         self.max_items: Optional[int] = None
-        self.bootstrap_done = False
         self.is_running = False
         self.current_task: Optional[asyncio.Task] = None
         self.last_run_at: Optional[datetime.datetime] = None
@@ -70,10 +67,10 @@ class SchedulerService:
         self._calculate_next_run()
         google_sheets_service.save_setting("crawler_schedule", self._config_dict())
         if self.enabled:
-            self.start(auto_bootstrap=False)
+            self.start()
         return self.get_status()
 
-    def start(self, auto_bootstrap: bool = True) -> None:
+    def start(self) -> None:
         if not self.enabled:
             logger.info("[Scheduler] Scheduler disabled by configuration.")
             return
@@ -81,7 +78,7 @@ class SchedulerService:
             return
         self.is_running = True
         self._calculate_next_run()
-        self.current_task = asyncio.create_task(self._main_scheduler_loop(auto_bootstrap))
+        self.current_task = asyncio.create_task(self._main_scheduler_loop())
         logger.info("[Scheduler] Started. Next run: %s", self.next_run_at)
 
     def stop(self) -> None:
@@ -100,25 +97,7 @@ class SchedulerService:
             target_local += datetime.timedelta(days=1)
         self.next_run_at = target_local.astimezone(datetime.timezone.utc).replace(tzinfo=None)
 
-    async def _main_scheduler_loop(self, auto_bootstrap: bool = True) -> None:
-        db = SessionLocal()
-        try:
-            lead_count = db.query(Lead).count()
-        finally:
-            db.close()
-        self.bootstrap_done = lead_count > 0
-
-        if auto_bootstrap and not self.bootstrap_done:
-            try:
-                self.last_run_summary["status"] = "BOOTSTRAPPING"
-                await self._execute_run("1_month", 20, "BOOTSTRAP_SUCCESS")
-                self.bootstrap_done = True
-            except asyncio.CancelledError:
-                return
-            except Exception as exc:
-                logger.error("[Scheduler] Bootstrap failed: %s", exc, exc_info=True)
-                self.last_run_summary["status"] = "BOOTSTRAP_FAILED"
-
+    async def _main_scheduler_loop(self) -> None:
         while self.is_running:
             try:
                 self._calculate_next_run()
@@ -185,7 +164,6 @@ class SchedulerService:
             "enabled": self.enabled,
             "is_running": self.is_running,
             "is_fe_task_active": priority_coordinator.is_fe_active,
-            "bootstrap_completed": self.bootstrap_done,
             "schedule": self._config_dict(),
             "daily_schedule": f"{int(self.hour):02d}:{int(self.minute):02d} {self.timezone}",
             "schedule_label": self._schedule_label(),

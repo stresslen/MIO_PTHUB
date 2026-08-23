@@ -2,7 +2,6 @@
 """
 Dedicated Automated Daily Scheduler Daemon for AI Lead Intelligence & Crawler.
 Usage:
-  python3 -m scripts.auto_scheduler --bootstrap
   python3 -m scripts.auto_scheduler --run-now
 """
 
@@ -28,7 +27,6 @@ logger = logging.getLogger("scheduler_daemon")
 
 async def main():
     parser = argparse.ArgumentParser(description="AI Lead Intelligence Daily Scheduler Daemon")
-    parser.add_argument("--bootstrap", action="store_true", help="Crawl historical data (past 1 month) immediately on start")
     parser.add_argument("--run-now", action="store_true", help="Run full crawl immediately then exit")
     parser.add_argument("--timeframe", type=str, default="1_month", help="Timeframe for immediate run (1_day, 1_week, 1_month, all)")
 
@@ -47,7 +45,7 @@ async def main():
         return
 
     print("[*] Starting continuous daily background scheduler loop...")
-    scheduler_service.start(auto_bootstrap=args.bootstrap)
+    scheduler_service.start()
 
     try:
         # Keep running

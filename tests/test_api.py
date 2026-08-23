@@ -170,3 +170,22 @@ def test_scheduler_ignores_old_weekly_monthly_fields():
     assert service.timeframe == "1_day"
     assert service.hour == 15
     assert service.minute == 45
+
+async def test_scheduler_start_does_not_bootstrap_historical_data(monkeypatch):
+    import asyncio
+    from app.services.scheduler_service import SchedulerService
+
+    service = SchedulerService()
+    service.enabled = True
+    runs = []
+
+    async def record_run(*args, **kwargs):
+        runs.append((args, kwargs))
+
+    monkeypatch.setattr(service, "_execute_run", record_run)
+    service.start()
+    await asyncio.sleep(0.01)
+    service.stop()
+
+    assert runs == []
+

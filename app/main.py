@@ -86,7 +86,7 @@ def create_app() -> FastAPI:
         logger.info("Starting configurable crawler scheduler...")
         from app.services.scheduler_service import scheduler_service
         scheduler_service.load_persisted_config()
-        scheduler_service.start(auto_bootstrap=True)
+        scheduler_service.start()
         logger.info("System initialized successfully.")
 
     @app.on_event("shutdown")
