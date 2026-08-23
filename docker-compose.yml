@@ -1,0 +1,18 @@
+version: '3.8'
+
+services:
+  lead-crawler:
+    build: .
+    container_name: ai_lead_crawler
+    ports:
+      - "8000:8000"
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8000
+      - DATABASE_URL=sqlite:///./leads.db
+      - AI_PROVIDER=rule_based
+    volumes:
+      - ./data:/app/data
+      - ./configs:/app/configs
+      - ./leads.db:/app/leads.db
+    restart: unless-stopped

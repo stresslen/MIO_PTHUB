@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#f4f2ed">
+    <title>MIO | Market Intelligence Operations</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&amp;family=Manrope:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/style.css?v=2.0.2">
+</head>
+<body>
+    <div class="app-shell">
+        <aside class="sidebar">
+            <a class="brand" href="#leads" aria-label="MIO - Trang chính">
+                <span class="brand-mark">M</span>
+                <span class="brand-copy">
+                    <strong>MIO</strong>
+                    <small>Market intelligence</small>
+                </span>
+            </a>
+
+            <nav class="nav-menu" aria-label="Điều hướng chính">
+                <span class="nav-label">Không gian làm việc</span>
+                <a href="#leads" class="nav-item active" id="nav-leads" data-target="page-leads">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6.5h16M4 12h16M4 17.5h10"/></svg>
+                    <span>Cơ hội thị trường</span>
+                </a>
+                <a href="#crawlers" class="nav-item" id="nav-crawlers" data-target="page-crawlers">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 3v3m0 12v3M3 12h3m12 0h3M5.6 5.6l2.1 2.1m8.6 8.6 2.1 2.1m0-12.8-2.1 2.1m-8.6 8.6-2.1 2.1"/></svg>
+                    <span>Nguồn dữ liệu</span>
+                </a>
+            </nav>
+
+            <div class="sidebar-footer">
+                <div class="service-state">
+                    <span class="status-dot online"></span>
+                    <div>
+                        <strong>Hệ thống trực tuyến</strong>
+                        <small>Gemini + XAH Search</small>
+                    </div>
+                </div>
+                <p>Dữ liệu được tổng hợp từ nguồn công khai và lưu trên Google Sheets.</p>
+            </div>
+        </aside>
+
+        <main class="main-content">
+            <div class="page-view active" id="page-leads">
+                <header class="top-header">
+                    <div class="header-title">
+                        <span class="eyebrow">Opportunity desk</span>
+                        <h1>Cơ hội thị trường</h1>
+                        <p class="subtitle">Theo dõi nhu cầu đầu tư số từ các tổ chức và cơ quan tại Việt Nam.</p>
+                    </div>
+                    <div class="header-actions">
+                        <button class="btn btn-quiet" id="btn-refresh" type="button">
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg>
+                            Làm mới
+                        </button>
+                        <button class="btn btn-quiet" id="btn-export-csv" type="button">
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 20h14"/></svg>
+                            Xuất CSV
+                        </button>
+                        <button class="btn btn-primary btn-trigger-crawl" type="button">
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+                            Cào lại dữ liệu
+                        </button>
+                    </div>
+                </header>
+
+                <section class="filter-card" aria-label="Bộ lọc cơ hội">
+                    <div class="filter-row">
+                        <div class="search-input-group">
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="m16 16 4 4"/></svg>
+                            <input type="search" id="filter-query" placeholder="Tìm theo tổ chức, nhu cầu hoặc từ khóa..." autocomplete="off">
+                        </div>
+                        <div class="select-group">
+                            <label for="filter-action">Ưu tiên</label>
+                            <select id="filter-action">
+                                <option value="">Tất cả</option>
+                                <option value="CALL">CALL · Ưu tiên cao</option>
+                                <option value="EMAIL">EMAIL · Tiềm năng</option>
+                                <option value="NURTURE">NURTURE · Theo dõi</option>
+                            </select>
+                        </div>
+                        <div class="select-group">
+                            <label for="filter-source">Nguồn</label>
+                            <select id="filter-source">
+                                <option value="">Tất cả 10 nguồn</option>
+                                <option value="muasamcong">Mạng Đấu thầu Quốc gia</option>
+                                <option value="dauthau_asia">DauThau.info</option>
+                                <option value="baodauthau">Báo Đấu thầu</option>
+                                <option value="chinhphu">Cổng Chính phủ</option>
+                                <option value="xaydungchinhsach">Xây dựng Chính sách</option>
+                                <option value="congbao">Công báo Chính phủ</option>
+                                <option value="most_gov">Bộ Khoa học &amp; Công nghệ</option>
+                                <option value="vietnamnet">VietnamNet</option>
+                                <option value="vnexpress">VnExpress</option>
+                                <option value="hanoi_gov">Cổng TP. Hà Nội</option>
+                            </select>
+                        </div>
+                        <div class="select-group">
+                            <label for="filter-sort">Sắp xếp</label>
+                            <select id="filter-sort">
+                                <option value="score_desc">Điểm cao nhất</option>
+                                <option value="crawled_at_desc">Mới thu thập</option>
+                                <option value="published_at_desc">Ngày đăng mới nhất</option>
+                                <option value="published_at_asc">Ngày đăng cũ nhất</option>
+                                <option value="budget_value_desc">Ngân sách lớn nhất</option>
+                            </select>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="data-table-container">
+                    <div class="table-header-info">
+                        <span id="results-count-text">Đang tải dữ liệu...</span>
+                        <div class="table-legend" aria-label="Chú thích mức ưu tiên">
+                            <span class="legend-item"><i class="legend-dot call"></i>CALL</span>
+                            <span class="legend-item"><i class="legend-dot email"></i>EMAIL</span>
+                            <span class="legend-item"><i class="legend-dot nurture"></i>NURTURE</span>
+                        </div>
+                    </div>
+                    <div class="table-responsive">
+                        <table class="leads-table" id="leads-table">
+                            <colgroup>
+                                <col class="col-score">
+                                <col class="col-organization">
+                                <col class="col-need">
+                                <col class="col-budget">
+                                <col class="col-location">
+                                <col class="col-date">
+                                <col class="col-detail">
+                            </colgroup>
+                            <thead>
+                                <tr>
+                                    <th>Điểm</th>
+                                    <th>Đơn vị / Cơ quan</th>
+                                    <th>Nhu cầu trọng tâm</th>
+                                    <th>Ngân sách</th>
+                                    <th>Địa bàn</th>
+                                    <th>Ngày đăng</th>
+                                    <th><span class="sr-only">Thao tác</span></th>
+                                </tr>
+                            </thead>
+                            <tbody id="leads-tbody"></tbody>
+                        </table>
+                    </div>
+                    <div class="empty-state hidden" id="empty-state">
+                        <span class="empty-mark">0</span>
+                        <h3>Không có cơ hội phù hợp</h3>
+                        <p>Thử thay đổi bộ lọc hoặc cào lại dữ liệu để cập nhật nguồn mới.</p>
+                    </div>
+                    <div class="pagination-bar" id="pagination-bar">
+                        <button class="btn btn-sm btn-quiet" id="btn-prev-page" type="button" disabled>Trang trước</button>
+                        <span id="pagination-info">Trang 1 / 1</span>
+                        <button class="btn btn-sm btn-quiet" id="btn-next-page" type="button" disabled>Trang sau</button>
+                    </div>
+                </section>
+            </div>
+
+            <div class="page-view" id="page-crawlers" style="display: none;">
+                <header class="top-header">
+                    <div class="header-title">
+                        <span class="eyebrow">Data operations</span>
+                        <h1>Nguồn dữ liệu</h1>
+                        <p class="subtitle">Kiểm soát kết nối, lịch chạy và trạng thái thu thập của từng nguồn.</p>
+                    </div>
+                    <div class="header-actions">
+                        <button class="btn btn-quiet" id="btn-refresh-sources" type="button">
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg>
+                            Làm mới
+                        </button>
+                        <button class="btn btn-primary btn-trigger-crawl" type="button">
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+                            Cào lại dữ liệu
+                        </button>
+                    </div>
+                </header>
+
+                <section class="scheduler-card" id="scheduler-card">
+                    <div class="scheduler-header">
+                        <div class="scheduler-title-group">
+                            <span class="scheduler-monogram">AUTO</span>
+                            <div>
+                                <span class="section-kicker">Lịch vận hành</span>
+                                <h2>Thu thập tự động hàng ngày</h2>
+                                <p>Hệ thống rà soát dữ liệu mới từ tất cả nguồn theo giờ Việt Nam.</p>
+                            </div>
+                        </div>
+                        <div class="scheduler-actions">
+                            <button class="btn btn-secondary" id="btn-configure-scheduler" type="button">Chọn giờ chạy</button>
+                            <button class="scheduler-toggle" id="btn-toggle-scheduler" type="button">
+                                <span class="dot-indicator online" id="scheduler-status-dot"></span>
+                                <span id="scheduler-toggle-text">Đang bật</span>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="scheduler-metrics-grid">
+                        <div class="sch-metric">
+                            <span class="sch-label">Trạng thái</span>
+                            <strong id="sch-status-text" class="text-success">Đang tải...</strong>
+                        </div>
+                        <div class="sch-metric">
+                            <span class="sch-label">Lần chạy tiếp theo</span>
+                            <strong id="sch-next-run">Đang tính...</strong>
+                        </div>
+                        <div class="sch-metric">
+                            <span class="sch-label">Lần chạy gần nhất</span>
+                            <strong id="sch-last-run">Chưa có dữ liệu</strong>
+                        </div>
+                        <div class="sch-metric">
+                            <span class="sch-label">Số phiên tự động</span>
+                            <strong id="sch-total-runs">0 phiên</strong>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="sources-management-section">
+                    <div class="section-title">
+                        <div>
+                            <span class="section-kicker">10 kết nối</span>
+                            <h2>Danh sách nguồn</h2>
+                        </div>
+                        <p>Trạng thái và sản lượng dữ liệu của từng cổng thông tin.</p>
+                    </div>
+                    <div class="sources-grid" id="sources-grid"></div>
+                </section>
+            </div>
+        </main>
+    </div>
+
+    <div class="modal-overlay hidden" id="lead-modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+        <div class="modal-card modal-detail">
+            <div class="modal-header">
+                <div class="modal-title-group">
+                    <span class="badge" id="modal-action-badge">CALL</span>
+                    <h2 id="modal-title">Chi tiết cơ hội</h2>
+                </div>
+                <button class="btn-close" id="btn-close-modal" type="button" aria-label="Đóng">×</button>
+            </div>
+            <div class="modal-body" id="modal-body"></div>
+        </div>
+    </div>
+
+    <div class="modal-overlay hidden" id="crawl-modal" role="dialog" aria-modal="true" aria-labelledby="crawl-modal-title">
+        <div class="modal-card modal-sm">
+            <div class="modal-header">
+                <div>
+                    <span class="section-kicker">Thu thập thủ công</span>
+                    <h2 id="crawl-modal-title">Cào lại dữ liệu</h2>
+                </div>
+                <button class="btn-close" id="btn-close-crawl-modal" type="button" aria-label="Đóng">×</button>
+            </div>
+            <div class="modal-body">
+                <p class="modal-desc">Chọn nguồn và khoảng ngày xuất bản. Dữ liệu mới sẽ được phân tích, chống trùng và lưu vào hệ thống.</p>
+                <div class="form-group">
+                    <label for="crawl-source-select">Nguồn thu thập</label>
+                    <select id="crawl-source-select" class="form-control">
+                        <option value="">Tất cả 10 nguồn</option>
+                        <option value="muasamcong">Mạng Đấu thầu Quốc gia</option>
+                        <option value="dauthau_asia">DauThau.info</option>
+                        <option value="baodauthau">Báo Đấu thầu</option>
+                        <option value="chinhphu">Cổng Thông tin Chính phủ</option>
+                        <option value="xaydungchinhsach">Xây dựng Chính sách</option>
+                        <option value="congbao">Công báo Chính phủ</option>
+                        <option value="most_gov">Bộ Khoa học và Công nghệ</option>
+                        <option value="vietnamnet">VietnamNet</option>
+                        <option value="vnexpress">VnExpress</option>
+                        <option value="hanoi_gov">Cổng TP. Hà Nội</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="crawl-timeframe-select">Khoảng ngày xuất bản</label>
+                    <select id="crawl-timeframe-select" class="form-control">
+                        <option value="1_day">Trong 24 giờ qua</option>
+                        <option value="1_week" selected>Trong 7 ngày qua</option>
+                        <option value="1_month">Trong 30 ngày qua</option>
+                    </select>
+                </div>
+                <div class="crawl-progress-box hidden" id="crawl-progress-box">
+                    <div class="spinner"></div>
+                    <p id="crawl-progress-text">Đang kết nối và xử lý dữ liệu...</p>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-quiet" id="btn-cancel-crawl" type="button">Hủy</button>
+                <button class="btn btn-primary" id="btn-start-crawl" type="button">Bắt đầu thu thập</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-overlay hidden" id="schedule-modal" role="dialog" aria-modal="true" aria-labelledby="schedule-modal-title">
+        <div class="modal-card modal-sm">
+            <div class="modal-header">
+                <div>
+                    <span class="section-kicker">Lịch hàng ngày</span>
+                    <h2 id="schedule-modal-title">Chọn giờ chạy</h2>
+                </div>
+                <button class="btn-close" id="btn-close-schedule-modal" type="button" aria-label="Đóng">×</button>
+            </div>
+            <form id="schedule-form">
+                <div class="modal-body">
+                    <p class="modal-desc">Hệ thống sẽ chạy một lần mỗi ngày theo múi giờ Việt Nam.</p>
+                    <div class="form-group">
+                        <label for="schedule-time">Giờ bắt đầu</label>
+                        <input id="schedule-time" type="time" value="06:00" step="60" class="form-control time-control" required>
+                        <small class="field-help">Asia/Ho_Chi_Minh · GMT+7</small>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-quiet" id="btn-cancel-schedule">Hủy</button>
+                    <button type="submit" class="btn btn-primary">Lưu lịch chạy</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div class="toast-container" id="toast-container" aria-live="polite"></div>
+    <script src="/static/js/app.js?v=2.0.1"></script>
+</body>
+</html>

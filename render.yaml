@@ -1,0 +1,51 @@
+services:
+  - type: web
+    name: mio-ai-lead-intelligence
+    runtime: python
+    plan: starter
+    region: singapore
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: ENVIRONMENT
+        value: production
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DATABASE_URL
+        value: sqlite:////tmp/mio-cache.db
+      - key: XAH_SEARCH_URL
+        value: https://api.xah.io/v1/search
+      - key: XAH_SEARCH_MODEL
+        value: search
+      - key: XAH_SEARCH_TYPE
+        value: web
+      - key: XAH_MAX_RESULTS
+        value: 5
+      - key: XAH_COUNTRY
+        value: Vietnam
+      - key: XAH_LANGUAGE
+        value: Vietnam
+      - key: XAH_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: levuphong2909/gemini-3.7-flash-high
+      - key: GEMINI_BASE_URL
+        value: https://api.xah.io/v1/chat/completions
+      - key: GOOGLE_SHEETS_SPREADSHEET_ID
+        value: 17Glsl0gB7e0YKWAmxPdDUSDysGaeujudmN21Gts0GFw
+      - key: GOOGLE_SHEETS_LEADS_WORKSHEET
+        value: gid:0
+      - key: GOOGLE_SHEETS_SETTINGS_WORKSHEET
+        value: Settings
+      - key: SCHEDULER_ENABLED
+        value: true
+      - key: SCHEDULER_TIMEZONE
+        value: Asia/Ho_Chi_Minh
+      - key: GOOGLE_SERVICE_ACCOUNT_JSON
+        sync: false

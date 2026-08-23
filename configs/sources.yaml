@@ -1,0 +1,114 @@
+# ==============================================================================
+# AI Lead Intelligence & Crawler - Full Target Sources Configuration
+# Danh sách 10 nguồn dữ liệu Chuyển đổi số, AI & Đấu thầu tại Việt Nam
+# ==============================================================================
+
+sources:
+  - id: muasamcong
+    name: "Mạng Đấu thầu Quốc gia"
+    description: "Hệ thống mạng đấu thầu quốc gia & Lựa chọn nhà thầu"
+    enabled: true
+    adapter: "app.crawlers.muasamcong.MuaSamCongAdapter"
+    seed_urls:
+      - "https://muasamcong.mpi.gov.vn/web/guest/contractor-selection?render=index"
+    rate_limit_delay: 1.0
+    timeout: 45
+
+  - id: dauthau_asia
+    name: "DauThau.info (dauthau.asia)"
+    description: "Hệ sinh thái thông tin đấu thầu và kế hoạch lựa chọn nhà thầu"
+    enabled: true
+    adapter: "app.crawlers.dauthau_asia.DauThauAsiaAdapter"
+    seed_urls:
+      - "https://dauthau.asia/thongbao/moithau/"
+      - "https://dauthau.asia/news/"
+    rate_limit_delay: 1.0
+    timeout: 30
+
+  - id: baodauthau
+    name: "Báo Đấu thầu"
+    description: "Thông báo mời thầu và tin tức mua sắm công nghệ"
+    enabled: true
+    adapter: "app.crawlers.baodauthau.BaoDauThauAdapter"
+    seed_urls:
+      - "https://baodauthau.vn/thong-bao-moi-thau/"
+      - "https://baodauthau.vn/"
+    rate_limit_delay: 1.0
+    timeout: 30
+
+  - id: chinhphu
+    name: "Cổng Thông tin điện tử Chính phủ"
+    description: "Quyết định, thông báo, đề án chuyển đổi số cấp quốc gia"
+    enabled: true
+    adapter: "app.crawlers.chinhphu.ChinhPhuAdapter"
+    seed_urls:
+      - "https://chinhphu.vn/"
+      - "https://baochinhphu.vn/thoi-su.htm"
+      - "https://baochinhphu.vn/kinh-te.htm"
+    rate_limit_delay: 1.0
+    timeout: 30
+
+  - id: xaydungchinhsach
+    name: "Xây dựng Chính sách (chinhphu.vn)"
+    description: "Chính sách, đề án, nghị quyết mới và chủ trương đầu tư công"
+    enabled: true
+    adapter: "app.crawlers.chinhphu.XayDungChinhSachAdapter"
+    seed_urls:
+      - "https://xaydungchinhsach.chinhphu.vn/"
+    rate_limit_delay: 1.0
+    timeout: 30
+
+  - id: congbao
+    name: "Công báo Chính phủ"
+    description: "Văn bản quy phạm pháp luật, phê duyệt dự án và phân bổ ngân sách"
+    enabled: true
+    adapter: "app.crawlers.chinhphu.CongBaoAdapter"
+    seed_urls:
+      - "https://congbao.chinhphu.vn/"
+    rate_limit_delay: 1.0
+    timeout: 30
+
+  - id: most_gov
+    name: "Bộ Khoa học và Công nghệ (mst.gov.vn)"
+    description: "Đề án nghiên cứu, ứng dụng AI và phát triển công nghệ"
+    enabled: true
+    adapter: "app.crawlers.tech_news.MostGovAdapter"
+    seed_urls:
+      - "https://mst.gov.vn/"
+      - "https://mst.gov.vn/tin-tuc-su-kien/chuyen-doi-so.htm"
+      - "https://mst.gov.vn/tin-tuc-su-kien/khoa-hoc-va-cong-nghe.htm"
+      - "https://mst.gov.vn/tin-tuc-su-kien/doi-moi-sang-tao.htm"
+    rate_limit_delay: 1.0
+    timeout: 30
+
+  - id: vietnamnet
+    name: "VietnamNet (CNTT & CĐS)"
+    description: "Chuyên mục Công nghệ và Thông tin Truyền thông"
+    enabled: true
+    adapter: "app.crawlers.tech_news.VietnamNetAdapter"
+    seed_urls:
+      - "https://vietnamnet.vn/thong-tin-truyen-thong"
+      - "https://vietnamnet.vn/cong-nghe"
+    rate_limit_delay: 1.0
+    timeout: 30
+
+  - id: vnexpress
+    name: "VnExpress (Số Hóa & Khoa Học)"
+    description: "Chuyên mục Số Hóa, Công nghệ và Trí tuệ nhân tạo"
+    enabled: true
+    adapter: "app.crawlers.tech_news.VnExpressAdapter"
+    seed_urls:
+      - "https://vnexpress.net/so-hoa"
+      - "https://vnexpress.net/khoa-hoc"
+    rate_limit_delay: 1.0
+    timeout: 30
+
+  - id: hanoi_gov
+    name: "Cổng Thông tin TP. Hà Nội"
+    description: "Chỉ đạo điều hành, đề án và thông báo dự án số hóa thủ đô"
+    enabled: true
+    adapter: "app.crawlers.hanoi_gov.HanoiGovAdapter"
+    seed_urls:
+      - "https://hanoi.gov.vn"
+    rate_limit_delay: 1.0
+    timeout: 30

@@ -1,0 +1,63 @@
+# Scoring Engine Rules & Weights Configuration
+# Điểm số lead dao động từ 0 - 100 điểm
+
+weights:
+  # 1. Mức độ nhu cầu & dự án cụ thể
+  concrete_project_or_tender: 25   # Có dự án/gói thầu cụ thể liên quan AI/CĐS
+
+  # 2. Quy mô ngân sách
+  budget_gte_3b: 20                # Ngân sách >= 3 tỷ VNĐ
+  budget_gte_5b_bonus: 5           # Thưởng thêm nếu ngân sách >= 5 tỷ VNĐ (tổng +25)
+
+  # 3. Địa bàn chiến lược
+  strategic_location: 10           # Hà Nội, TP.HCM, Đà Nẵng
+  strategic_locations_list:
+    - "Hà Nội"
+    - "TP.HCM"
+    - "Thành phố Hồ Chí Minh"
+    - "Đà Nẵng"
+    - "Hải Phòng"
+    - "Quảng Ninh"
+    - "Bình Dương"
+
+  # 4. Thời hạn tiếp cận (Deadline)
+  deadline_gte_5days: 10           # Còn >= 5 ngày trước hạn đóng thầu/hạn nộp
+
+  # 5. Phù hợp năng lực lõi (OCR, CV, Voice, LLM/AI, Data)
+  core_capability_match: 15        # Trùng khớp năng lực AI trọng tâm (OCR/CV/Voice/LLM)
+
+  # 6. Thông tin liên hệ công khai
+  has_contact_info: 10             # Có email hoặc số điện thoại liên hệ công khai
+
+  # 7. Độ tươi mới của tin tức
+  freshness_lte_3days: 5           # Tin tức / thông báo đăng trong vòng 3 ngày gần nhất
+
+  # Điểm phạt (Penalties)
+  low_relevance_policy_only: -15   # Chỉ là tin tức chính sách chung, chưa có nhu cầu mua sắm cụ thể
+  expired_deadline: -30            # Gói thầu / thông báo đã hết hạn tiếp cận
+
+# Ngưỡng phân loại hành động (Action Thresholds)
+action_thresholds:
+  hot_lead:
+    min_score: 90
+    max_score: 100
+    action: "CALL"
+    badge_label: "Hot Lead"
+    color: "danger"
+    description: "Ưu tiên gọi điện / tiếp cận trực tiếp ngay lập tức"
+
+  qualified_lead:
+    min_score: 80
+    max_score: 89
+    action: "EMAIL"
+    badge_label: "Qualified"
+    color: "primary"
+    description: "Sales / Marketing chuẩn bị email chào giải pháp chuyên sâu"
+
+  nurture_lead:
+    min_score: 0
+    max_score: 79
+    action: "NURTURE"
+    badge_label: "Warm/Low"
+    color: "neutral"
+    description: "Marketing tiếp tục theo dõi, nuôi dưỡng và làm giàu thông tin"
