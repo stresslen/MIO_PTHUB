@@ -6,6 +6,7 @@ import datetime
 import io
 import json
 import logging
+import time
 from typing import Any
 
 from app.config import settings
@@ -61,23 +62,54 @@ class GoogleSheetsService:
             return self._spreadsheet
         if not self.configured:
             return None
-        try:
-            import gspread
-            from google.oauth2.service_account import Credentials
+        import gspread
+        from google.oauth2.service_account import Credentials
 
-            credentials = Credentials.from_service_account_info(
-                self._credentials_info(),
-                scopes=["https://www.googleapis.com/auth/spreadsheets"],
-            )
-            self._spreadsheet = gspread.authorize(credentials).open_by_key(
-                settings.google_sheets_spreadsheet_id
-            )
-            self.last_error = None
-            return self._spreadsheet
-        except Exception as exc:
-            self.last_error = str(exc)
-            logger.error("Không thể kết nối Google Sheets: %s", exc)
-            raise
+        credentials = Credentials.from_service_account_info(
+            self._credentials_info(),
+            scopes=["https://www.googleapis.com/auth/spreadsheets"],
+        )
+        for attempt in range(1, 4):
+            try:
+                self._spreadsheet = gspread.authorize(credentials).open_by_key(
+                    settings.google_sheets_spreadsheet_id
+                )
+                self.last_error = None
+                return self._spreadsheet
+            except Exception as exc:
+                self._spreadsheet = None
+                self.last_error = str(exc)
+                if attempt == 3:
+                    logger.error("Không thể kết nối Google Sheets sau 3 lần: %s", exc)
+                    raise
+                logger.warning(
+                    "Google Sheets tạm lỗi, thử lại lần %s/3: %s",
+                    attempt + 1,
+                    exc,
+                )
+                time.sleep(attempt)
+        return None
+
+    @staticmethod
+    def _is_ai_processed(item: Any) -> bool:
+        getter = (
+            item.get
+            if isinstance(item, dict)
+            else lambda key, default=None: getattr(item, key, default)
+        )
+        status = str(getter("status", "") or "").upper()
+        organization = str(getter("organization_name", "") or "").strip().lower()
+        summary = str(getter("need_summary", "") or "").strip().lower()
+        try:
+            score = float(getter("score", 0) or 0)
+        except (TypeError, ValueError):
+            score = 0
+        return bool(
+            status != "PENDING_AI"
+            and organization not in {"", "đang chờ ai bóc tách", "đang cập nhật"}
+            and not summary.startswith("[hàng đợi ai]")
+            and score >= 40
+        )
 
     def _worksheet(self, title: str, headers: list[str]):
         spreadsheet = self.connect()
@@ -129,7 +161,7 @@ class GoogleSheetsService:
         return value
 
     def upsert_lead(self, lead: Any) -> bool:
-        if not self.configured:
+        if not self.configured or not self._is_ai_processed(lead):
             return False
         try:
             worksheet = self._worksheet(settings.google_sheets_leads_worksheet, LEAD_HEADERS)
@@ -169,7 +201,7 @@ class GoogleSheetsService:
             missing_rows = [
                 self._lead_row(lead)
                 for lead in leads
-                if str(lead.id) not in existing_ids
+                if str(lead.id) not in existing_ids and self._is_ai_processed(lead)
             ]
             if missing_rows:
                 worksheet.append_rows(missing_rows, value_input_option="RAW")
@@ -214,6 +246,8 @@ class GoogleSheetsService:
                 records = self._public_records()
             imported = 0
             for record in records:
+                if not self._is_ai_processed(record):
+                    continue
                 fingerprint = str(record.get("content_fingerprint") or "").strip()
                 if not fingerprint or db.query(Lead).filter(Lead.content_fingerprint == fingerprint).first():
                     continue

@@ -10,7 +10,7 @@ from app.pipeline.normalize import (
     canonicalize_url,
 )
 from app.pipeline.dedup import compute_fingerprint
-from app.pipeline.extract import prefilter_keywords, ai_extractor
+from app.pipeline.extract import AIAuthenticationError, prefilter_keywords, ai_extractor
 
 
 def test_normalize_unicode_and_html():
@@ -107,3 +107,18 @@ def test_strict_extraction_prompt_separates_publication_date_and_deadline():
     assert "KHÔNG dùng ngày đăng bài" in prompt
     assert "Ngày đăng do crawler lấy từ metadata riêng" in prompt
     assert '"Đang cập nhật"' in prompt
+
+
+def test_ai_401_is_classified_as_authentication_error(monkeypatch):
+    import pytest
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "ai_provider", "gemini")
+    monkeypatch.setattr(settings, "gemini_api_key", "configured-test-key")
+
+    def reject(*args, **kwargs):
+        raise RuntimeError("Custom AI Gateway extraction error: 401")
+
+    monkeypatch.setattr(ai_extractor, "_extract_gemini", reject)
+    with pytest.raises(AIAuthenticationError):
+        ai_extractor.extract("Tin AI", "Nội dung", raise_on_api_error=True)

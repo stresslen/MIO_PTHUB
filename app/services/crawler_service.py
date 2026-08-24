@@ -14,7 +14,7 @@ from app.database import SessionLocal
 from app.models.lead import Lead, ActionEnum, LeadStatusEnum
 from app.models.source import CrawlRun, CrawlStatusEnum
 from app.pipeline.dedup import compute_fingerprint, is_duplicate
-from app.pipeline.extract import ai_extractor, prefilter_keywords, AIQuotaOrAPIError
+from app.pipeline.extract import ai_extractor, prefilter_keywords, AIAuthenticationError, AIQuotaOrAPIError
 from app.pipeline.normalize import clean_html, parse_datetime, utc_now
 from app.pipeline.scoring import scoring_engine
 from app.services.priority_service import priority_coordinator
@@ -215,6 +215,17 @@ class CrawlerService:
                     await asyncio.to_thread(google_sheets_service.upsert_lead, lead)
                     logger.info(f"[{source_id}] ✅ Đã lưu Lead đạt chuẩn: '{parsed.title[:40]}...' (Score: {score_res.total_score} - {score_res.recommended_action})")
 
+                except AIAuthenticationError as auth_err:
+                    db.rollback()
+                    crawl_run.error_count += 1
+                    crawl_run.status = CrawlStatusEnum.PARTIAL.value
+                    crawl_run.error_message = f"AI authentication failed: {auth_err}"
+                    logger.error(
+                        "[%s] AI authentication failed; stopping without saving unprocessed data: %s",
+                        source_id,
+                        auth_err,
+                    )
+                    break
                 except AIQuotaOrAPIError as quota_err:
                     db.rollback()
                     logger.warning(f"[{source_id}] ⚠️ Gemini API Quota/Error for {url}: {quota_err}")
@@ -229,44 +240,13 @@ class CrawlerService:
                             db.rollback()
                         break  # Stop 1-month crawl immediately!
                     else:
-                        # Daily crawl: Put in Queue (PENDING_AI)
-                        logger.info(f"[{source_id}] 📥 Chế độ crawl hàng ngày: Lưu '{parsed.title[:35]}...' vào HÀNG ĐỢI (Queue) chờ cấp lại quota AI.")
-                        lead = Lead(
-                            source=source_id,
-                            source_url=url,
-                            title=parsed.title,
-                            published_at=parsed.published_at,
-                            crawled_at=item_crawled_at,
-                            organization_name="Đang chờ AI bóc tách",
-                            organization_type="government",
-                            need_summary="[Hàng đợi AI] Bài viết đang chờ cấp lại hạn mức API Gemini để tiếp tục bóc tách.",
-                            need_categories=matched_cats or ["Chuyển đổi số"],
-                            budget_value=None,
-                            budget_text=None,
-                            location=None,
-                            contact_name=None,
-                            contact_email=None,
-                            contact_phone=None,
-                            deadline=None,
-                            keywords_matched=matched_kws,
-                            relevance=0.5,
-                            score=0,
-                            recommended_action="NURTURE",
-                            score_reasons=["Đang lưu trong hàng đợi xử lý AI"],
-                            evidence=[],
-                            sales_strategy="Chờ AI bóc tách và đề xuất chiến lược tiếp cận.",
-                            raw_content_ref=raw_doc.snapshot_path,
-                            content_fingerprint=fingerprint,
-                            status=LeadStatusEnum.PENDING_AI.value,
+                        crawl_run.error_count += 1
+                        logger.warning(
+                            "[%s] AI unavailable; skipped unprocessed item and will retry on a later crawl: %s",
+                            source_id,
+                            url,
                         )
-                        db.add(lead)
-                        crawl_run.new_leads += 1
-                        try:
-                            db.commit()
-                            db.refresh(lead)
-                            await asyncio.to_thread(google_sheets_service.upsert_lead, lead)
-                        except Exception:
-                            db.rollback()
+
 
                 except Exception as item_err:
                     db.rollback()
@@ -577,6 +557,18 @@ class CrawlerService:
                         await asyncio.to_thread(google_sheets_service.upsert_lead, lead)
                         logger.info(f"[{source_id}] ✅ Đã lưu Lead đạt chuẩn: '{parsed.title[:40]}...' (Score: {score_res.total_score} - {score_res.recommended_action})")
 
+                    except AIAuthenticationError as auth_err:
+                        db.rollback()
+                        run.error_count += 1
+                        run.status = CrawlStatusEnum.PARTIAL.value
+                        run.error_message = f"AI authentication failed: {auth_err}"
+                        stop_all = True
+                        logger.error(
+                            "[%s] AI authentication failed; stopping without saving unprocessed data: %s",
+                            source_id,
+                            auth_err,
+                        )
+                        break
                     except AIQuotaOrAPIError as quota_err:
                         db.rollback()
                         logger.warning(f"[{source_id}] ⚠️ Gemini API Quota limit: {quota_err}")
@@ -587,35 +579,13 @@ class CrawlerService:
                             stop_all = True
                             break
                         else:
-                            # Daily crawl: Put in Queue (PENDING_AI)
-                            logger.info(f"[{source_id}] 📥 Lưu '{parsed.title[:35]}...' vào HÀNG ĐỢI (Queue: PENDING_AI)")
-                            lead = Lead(
-                                source=source_id,
-                                source_url=url,
-                                title=parsed.title,
-                                published_at=parsed.published_at,
-                                crawled_at=item_crawled_at,
-                                organization_name="Đang chờ AI bóc tách",
-                                organization_type="government",
-                                need_summary="[Hàng đợi AI] Bài viết đang chờ cấp lại hạn mức API Gemini.",
-                                need_categories=matched_cats or ["Chuyển đổi số"],
-                                keywords_matched=matched_kws,
-                                relevance=0.5,
-                                score=0,
-                                recommended_action="NURTURE",
-                                score_reasons=["Đang lưu trong hàng đợi xử lý AI"],
-                                raw_content_ref=raw_doc.snapshot_path,
-                                content_fingerprint=fingerprint,
-                                status=LeadStatusEnum.PENDING_AI.value,
+                            run.error_count += 1
+                            logger.warning(
+                                "[%s] AI unavailable; skipped unprocessed item and will retry on a later crawl: %s",
+                                source_id,
+                                url,
                             )
-                            db.add(lead)
-                            run.new_leads += 1
-                            try:
-                                db.commit()
-                                db.refresh(lead)
-                                await asyncio.to_thread(google_sheets_service.upsert_lead, lead)
-                            except Exception:
-                                db.rollback()
+
 
                     except Exception as item_err:
                         db.rollback()

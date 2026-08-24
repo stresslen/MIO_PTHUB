@@ -73,6 +73,11 @@ class AIQuotaOrAPIError(Exception):
     pass
 
 
+class AIAuthenticationError(AIQuotaOrAPIError):
+    """Raised when the configured AI credential is rejected."""
+    pass
+
+
 class AIExtractor:
     """
     AI Extraction Engine supporting LLM APIs (OpenAI, Gemini) with
@@ -90,15 +95,23 @@ class AIExtractor:
         if settings.ai_provider == "openai" and settings.openai_api_key:
             try:
                 return self._extract_openai(title, clean_text, source)
+            except AIAuthenticationError:
+                raise
             except Exception as e:
                 logger.warning(f"OpenAI extraction failed: {e}")
+                if any(k in str(e).lower() for k in ["401", "403", "unauthorized", "invalid api key"]):
+                    raise AIAuthenticationError(f"OpenAI authentication error: {e}")
                 if raise_on_api_error or any(k in str(e).lower() for k in ["429", "quota", "rate", "limit"]):
                     raise AIQuotaOrAPIError(f"OpenAI error: {e}")
         elif settings.ai_provider == "gemini" and settings.gemini_api_key:
             try:
                 return self._extract_gemini(title, clean_text, source)
+            except AIAuthenticationError:
+                raise
             except Exception as e:
                 logger.warning(f"Gemini extraction error: {e}")
+                if any(k in str(e).lower() for k in ["401", "403", "unauthorized", "invalid api key"]):
+                    raise AIAuthenticationError(f"Gemini authentication error: {e}")
                 if raise_on_api_error or any(k in str(e).lower() for k in ["429", "quota", "rate", "limit", "resource_exhausted", "503"]):
                     raise AIQuotaOrAPIError(f"Gemini API Error: {e}")
 
@@ -284,6 +297,10 @@ class AIExtractor:
                 },
                 timeout=settings.llm_timeout_seconds,
             )
+            if response.status_code in (401, 403):
+                raise AIAuthenticationError(
+                    f"Custom AI Gateway rejected credentials: {response.status_code}"
+                )
             if not response.ok:
                 raise ValueError(f"Custom AI Gateway extraction error: {response.status_code}")
             content = response.json().get("choices", [{}])[0].get("message", {}).get("content", "")

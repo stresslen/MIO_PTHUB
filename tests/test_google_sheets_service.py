@@ -64,7 +64,7 @@ class FakeDb:
 
 def make_lead(lead_id):
     values = {name: None for name in LEAD_HEADERS}
-    values.update(id=lead_id, source="test", source_url="https://example.com", title="Lead")
+    values.update(id=lead_id, source="test", source_url="https://example.com", title="Lead", organization_name="Đơn vị đã xác minh", need_summary="Nhu cầu đã được AI bóc tách", score=80, status="NEW")
     return SimpleNamespace(**values)
 
 
@@ -88,3 +88,17 @@ def test_sync_sqlite_targets_gid_zero_and_appends_only_missing(monkeypatch):
     assert worksheet.appended[0][0] == "new-id"
     assert worksheet.appended[0][LEAD_HEADERS.index("contact_phone")] == "0826891248"
     assert worksheet.formatted == [("P2:P", {"numberFormat": {"type": "TEXT"}})]
+
+
+def test_pending_ai_is_never_written_to_google_sheets(monkeypatch):
+    monkeypatch.setattr(settings, "google_sheets_spreadsheet_id", "sheet-id")
+    monkeypatch.setattr(settings, "google_service_account_json", "{}")
+    pending = make_lead("pending-id")
+    pending.status = "PENDING_AI"
+    pending.organization_name = "Đang chờ AI bóc tách"
+    pending.need_summary = "[Hàng đợi AI] Chưa xử lý"
+    pending.score = 0
+
+    service = GoogleSheetsService()
+    assert service.upsert_lead(pending) is False
+    assert service._is_ai_processed(pending) is False
