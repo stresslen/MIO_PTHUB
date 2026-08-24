@@ -5,8 +5,9 @@ import re
 from typing import Any, Dict, List, Optional
 import requests
 
-from app.config import settings, get_scoring_config
+from app.config import settings
 from app.models.scoring_rule import ScoreResult, ScoreBreakdownItem
+from app.pipeline.extract import AIAuthenticationError, AIQuotaOrAPIError
 from app.pipeline.normalize import utc_now
 
 logger = logging.getLogger(__name__)
@@ -17,14 +18,15 @@ class AIScoringEngine:
     AI-Powered Lead Scoring Engine.
     Uses Google Gemini (e.g. gemini-2.0-flash-lite / gemini-1.5-flash) to evaluate
     and score B2B/B2G leads across comprehensive multi-dimensional criteria.
-    Includes a robust rule-based fallback when GEMINI_API_KEY is not yet configured.
+    AI scoring is mandatory. Invalid or unavailable AI responses are surfaced to
+    the crawler so an item is skipped instead of receiving a synthetic score.
     """
 
     def __init__(self):
-        self.config = get_scoring_config()
+        pass
 
     def reload_config(self):
-        self.config = get_scoring_config()
+        pass
 
     def evaluate(
         self,
@@ -40,65 +42,58 @@ class AIScoringEngine:
         relevance: float = 0.0,
         raw_evidence: Optional[List[str]] = None,
     ) -> ScoreResult:
+        """Evaluate a lead using only the configured AI provider.
+
+        A failed or malformed AI response raises AIQuotaOrAPIError. The crawler
+        catches it and does not persist the unfinished item.
         """
-        Evaluate and score a lead.
-        Prioritizes Google Gemini AI scoring when GEMINI_API_KEY is present,
-        and gracefully falls back to deterministic rule scoring when offline / key not set.
-        """
-        # 1. Check if Gemini API key is configured
-        if settings.gemini_api_key:
+        common = {
+            "title": title,
+            "need_summary": need_summary,
+            "need_categories": need_categories,
+            "budget_value": budget_value,
+            "location": location,
+            "contact_email": contact_email,
+            "contact_phone": contact_phone,
+            "deadline": deadline,
+            "published_at": published_at,
+            "relevance": relevance,
+        }
+
+        if settings.ai_provider == "gemini":
+            if not settings.gemini_api_key:
+                raise AIAuthenticationError("Chưa cấu hình GEMINI_API_KEY cho AI scoring")
             try:
-                ai_res = self._evaluate_with_gemini(
-                    title=title,
-                    need_summary=need_summary,
-                    need_categories=need_categories,
-                    budget_value=budget_value,
-                    location=location,
-                    contact_email=contact_email,
-                    contact_phone=contact_phone,
-                    deadline=deadline,
-                    published_at=published_at,
-                    relevance=relevance,
+                result = self._evaluate_with_gemini(
+                    **common,
                     evidence=raw_evidence or [],
                 )
-                if ai_res:
-                    return ai_res
-            except Exception as e:
-                logger.warning(f"Gemini AI Scoring failed, falling back to rule-based: {e}")
+            except (AIAuthenticationError, AIQuotaOrAPIError):
+                raise
+            except Exception as exc:
+                raise AIQuotaOrAPIError(
+                    f"Gemini scoring trả dữ liệu không hợp lệ: {exc}"
+                ) from exc
+            if result is None:
+                raise AIQuotaOrAPIError("Gemini scoring không trả về kết quả hợp lệ")
+            return result
 
-        # 2. Check if OpenAI API key is configured as alternate
-        if settings.openai_api_key and settings.ai_provider == "openai":
+        if settings.ai_provider == "openai":
+            if not settings.openai_api_key:
+                raise AIAuthenticationError("Chưa cấu hình OPENAI_API_KEY cho AI scoring")
             try:
-                ai_res = self._evaluate_with_openai(
-                    title=title,
-                    need_summary=need_summary,
-                    need_categories=need_categories,
-                    budget_value=budget_value,
-                    location=location,
-                    contact_email=contact_email,
-                    contact_phone=contact_phone,
-                    deadline=deadline,
-                    published_at=published_at,
-                    relevance=relevance,
-                )
-                if ai_res:
-                    return ai_res
-            except Exception as e:
-                logger.warning(f"OpenAI AI Scoring failed, falling back to rule-based: {e}")
+                result = self._evaluate_with_openai(**common)
+            except (AIAuthenticationError, AIQuotaOrAPIError):
+                raise
+            except Exception as exc:
+                raise AIQuotaOrAPIError(
+                    f"OpenAI scoring trả dữ liệu không hợp lệ: {exc}"
+                ) from exc
+            if result is None:
+                raise AIQuotaOrAPIError("OpenAI scoring không trả về kết quả hợp lệ")
+            return result
 
-        # 3. Rule-Based Fallback Engine (Fully featured & deterministic)
-        return self._evaluate_rule_based(
-            title=title,
-            need_summary=need_summary,
-            need_categories=need_categories,
-            budget_value=budget_value,
-            location=location,
-            contact_email=contact_email,
-            contact_phone=contact_phone,
-            deadline=deadline,
-            published_at=published_at,
-            relevance=relevance,
-        )
+        raise AIAuthenticationError(f"AI_PROVIDER không được hỗ trợ: {settings.ai_provider}")
 
     def _evaluate_with_gemini(
         self,
@@ -216,9 +211,13 @@ Trả về duy nhất 1 JSON object hợp lệ:
 
                 parsed = json.loads(clean_content)
                 return self._parse_ai_response(parsed)
-            else:
-                logger.warning(f"Custom AI Gateway returned status {resp.status_code}: {resp.text[:200]}")
-                return None
+            if resp.status_code in (401, 403):
+                raise AIAuthenticationError(
+                    f"Custom AI Gateway từ chối GEMINI_API_KEY (HTTP {resp.status_code})"
+                )
+            raise AIQuotaOrAPIError(
+                f"Custom AI Gateway scoring lỗi HTTP {resp.status_code}: {resp.text[:200]}"
+            )
 
         # Standard Google AI Studio API call
         endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{settings.gemini_model}:generateContent?key={settings.gemini_api_key}"
@@ -337,155 +336,6 @@ Trả về duy nhất 1 JSON object hợp lệ:
             evaluated_by="ai_openai",
         )
 
-    def _evaluate_rule_based(
-        self,
-        title: str,
-        need_summary: Optional[str],
-        need_categories: List[str],
-        budget_value: Optional[float],
-        location: Optional[str],
-        contact_email: Optional[str],
-        contact_phone: Optional[str],
-        deadline: Optional[datetime.datetime],
-        published_at: Optional[datetime.datetime],
-        relevance: float = 0.0,
-    ) -> ScoreResult:
-        """
-        Comprehensive rule-based scoring engine (0-100) running offline.
-        """
-        weights = self.config.get("weights", {})
-        breakdown: List[ScoreBreakdownItem] = []
-        reasons: List[str] = []
-        raw_score = 0
-
-        combined_text = f"{title} {need_summary or ''}".lower()
-
-        # 1. Broad Digitization / Digital Transformation / AI Need (+25)
-        has_tech_need = any(
-            kw in combined_text for kw in [
-                "số hóa", "chuyển đổi số", "ứng dụng ai", "trí tuệ nhân tạo", "ai", "ocr", "camera", "voice", "phần mềm",
-                "cơ sở dữ liệu", "nền tảng số", "hạ tầng số", "công nghệ thông tin", "cntt", "gói thầu", "mời thầu",
-                "dự án", "thuê dịch vụ", "xây dựng hệ thống", "nâng cấp", "triển khai", "mua sắm", "tin học hóa", "thông minh"
-            ]
-        )
-        if has_tech_need:
-            pts = weights.get("concrete_project_or_tender", 25)
-            raw_score += pts
-            reason = f"+{pts} Có nhu cầu về Số hóa, Chuyển đổi số, Ứng dụng AI hoặc Phần mềm/CNTT"
-            reasons.append(reason)
-            breakdown.append(ScoreBreakdownItem(rule_name="tech_transformation_need", points=pts, reason=reason))
-
-        # 2. Budget >= 3 tỷ (+20, bonus +5 if >= 5 tỷ)
-        if budget_value and budget_value >= 3_000_000_000:
-            pts = weights.get("budget_gte_3b", 20)
-            raw_score += pts
-            budget_str = f"{budget_value / 1_000_000_000:.1f} tỷ"
-            reason = f"+{pts} Ngân sách lớn ({budget_str} VND >= 3 tỷ)"
-            reasons.append(reason)
-            breakdown.append(ScoreBreakdownItem(rule_name="budget_gte_3b", points=pts, reason=reason))
-
-            if budget_value >= 5_000_000_000:
-                bonus_pts = weights.get("budget_gte_5b_bonus", 5)
-                raw_score += bonus_pts
-                bonus_reason = f"+{bonus_pts} Thưởng bổ sung cho ngân sách quy mô lớn >= 5 tỷ ({budget_str} VND)"
-                reasons.append(bonus_reason)
-                breakdown.append(ScoreBreakdownItem(rule_name="budget_gte_5b_bonus", points=bonus_pts, reason=bonus_reason))
-        elif budget_value and budget_value >= 500_000_000:
-            pts = 10
-            raw_score += pts
-            budget_str = f"{budget_value / 1_000_000_000:.2f} tỷ"
-            reason = f"+{pts} Có dự toán ngân sách rõ ràng ({budget_str} VND)"
-            reasons.append(reason)
-            breakdown.append(ScoreBreakdownItem(rule_name="budget_positive", points=pts, reason=reason))
-
-        # 3. Strategic Location (+10)
-        strategic_list = weights.get("strategic_locations_list", ["Hà Nội", "TP.HCM", "Đà Nẵng", "Quảng Ninh", "Hải Phòng", "Bình Dương", "Đồng Nai", "Cần Thơ"])
-        if location and any(strat.lower() in location.lower() for strat in strategic_list):
-            pts = weights.get("strategic_location", 10)
-            raw_score += pts
-            reason = f"+{pts} Địa bàn chiến lược trọng điểm ({location})"
-            reasons.append(reason)
-            breakdown.append(ScoreBreakdownItem(rule_name="strategic_location", points=pts, reason=reason))
-
-        # 4. Capability Match (+15)
-        core_caps = ["OCR / Số hóa tài liệu", "Computer Vision / Thị giác máy tính", "Voice AI / Trợ lý giọng nói", "LLM / AI / Trí tuệ nhân tạo", "Chuyển đổi số", "Phần mềm", "Data Warehouse / Cloud"]
-        matched_core = [c for c in need_categories if any(core.lower() in c.lower() for core in core_caps)]
-        if matched_core or has_tech_need:
-            pts = weights.get("core_capability_match", 15)
-            raw_score += pts
-            caps_str = ", ".join(matched_core[:2]) if matched_core else "Số hóa / Chuyển đổi số / AI"
-            reason = f"+{pts} Khớp năng lực công nghệ về {caps_str}"
-            reasons.append(reason)
-            breakdown.append(ScoreBreakdownItem(rule_name="core_capability_match", points=pts, reason=reason))
-
-        # 5. Public Contact Info (+10)
-        if contact_email or contact_phone:
-            pts = weights.get("has_contact_info", 10)
-            raw_score += pts
-            c_type = "Email & Số điện thoại" if (contact_email and contact_phone) else ("Email" if contact_email else "Số điện thoại")
-            reason = f"+{pts} Có thông tin liên hệ công khai ({c_type})"
-            reasons.append(reason)
-            breakdown.append(ScoreBreakdownItem(rule_name="has_contact_info", points=pts, reason=reason))
-
-        # 6. Freshness <= 3 days (+5)
-        now = utc_now()
-        if published_at:
-            age_days = (now - published_at).total_seconds() / 86400.0
-            if age_days <= 3.0:
-                pts = weights.get("freshness_lte_3days", 5)
-                raw_score += pts
-                reason = f"+{pts} Thông tin xuất bản mới ({age_days:.1f} ngày trước <= 3 ngày)"
-                reasons.append(reason)
-                breakdown.append(ScoreBreakdownItem(rule_name="freshness_lte_3days", points=pts, reason=reason))
-
-        # 7. Deadline Check (+10 or -30)
-        if deadline:
-            time_left = (deadline - now).total_seconds() / 86400.0
-            if time_left >= 5.0:
-                pts = weights.get("deadline_gte_5days", 10)
-                raw_score += pts
-                reason = f"+{pts} Còn nhiều thời gian chuẩn bị hồ sơ tiếp cận ({int(time_left)} ngày >= 5 ngày)"
-                reasons.append(reason)
-                breakdown.append(ScoreBreakdownItem(rule_name="deadline_gte_5days", points=pts, reason=reason))
-            elif time_left < 0:
-                penalty = weights.get("expired_deadline", -30)
-                raw_score += penalty
-                reason = f"{penalty} Thời hạn tiếp cận / đóng thầu đã qua"
-                reasons.append(reason)
-                breakdown.append(ScoreBreakdownItem(rule_name="expired_deadline", points=penalty, reason=reason))
-
-        # 8. Low relevance penalty (-15)
-        if relevance < 0.4:
-            penalty = weights.get("low_relevance_policy_only", -15)
-            raw_score += penalty
-            reason = f"{penalty} Mức độ phù hợp thấp hoặc chỉ là tin tức chính sách/tuyên truyền chung"
-            reasons.append(reason)
-            breakdown.append(ScoreBreakdownItem(rule_name="low_relevance", points=penalty, reason=reason))
-
-        final_score = max(0, min(100, raw_score))
-
-        thresholds = self.config.get("action_thresholds", {})
-        hot_min = thresholds.get("hot_lead", {}).get("min_score", 90)
-        qual_min = thresholds.get("qualified_lead", {}).get("min_score", 80)
-
-        if final_score >= hot_min:
-            action = "CALL"
-            sales_strategy = "Hot Lead ưu tiên cao: Cử Giám đốc kinh doanh/Trưởng nhóm B2G liên hệ trực tiếp đơn vị để khảo sát nhu cầu nghiệp vụ và giới thiệu hồ sơ năng lực AI."
-        elif final_score >= qual_min:
-            action = "EMAIL"
-            sales_strategy = "Qualified Lead: Gửi email chính thức kèm tài liệu giới thiệu giải pháp (Pitch Deck) và demo case study tương tự trong ngành."
-        else:
-            action = "NURTURE"
-            sales_strategy = "Nurturing Lead: Đưa vào danh sách Marketing nurturing, theo dõi các văn bản chỉ đạo tiếp theo của đơn vị."
-
-        return ScoreResult(
-            total_score=final_score,
-            recommended_action=action,
-            reasons=reasons,
-            breakdown=breakdown,
-            sales_strategy_suggestion=sales_strategy,
-            evaluated_by="rule_based_engine (Set GEMINI_API_KEY to activate Gemini AI)",
-        )
 
 
 scoring_engine = AIScoringEngine()

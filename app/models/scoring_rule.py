@@ -16,7 +16,7 @@ class ScoreResult(BaseModel):
     reasons: List[str]
     breakdown: List[ScoreBreakdownItem] = Field(default_factory=list)
     sales_strategy_suggestion: Optional[str] = None
-    evaluated_by: str = "ai_gemini"  # ai_gemini or rule_based_engine
+    evaluated_by: str = "ai_gemini"  # configured AI provider identifier
 
 
 class AIExtractionResult(BaseModel):
