@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -15,6 +16,13 @@ from app.services.source_service import source_service
 from app.services.linkedin_settings_service import linkedin_settings_service
 
 router = APIRouter(prefix="/sources", tags=["Sources"])
+
+
+async def _run_source_probe(source_id: str):
+    probe = source_service.probe
+    if inspect.iscoroutinefunction(probe):
+        return await probe(source_id)
+    return await asyncio.to_thread(probe, source_id)
 
 
 class LinkedInConfigUpdate(BaseModel):
@@ -87,7 +95,7 @@ async def import_sources(payload: SourceImportRequest):
         needs_update = 0
         for item in result["items"]:
             if item["status"] == "NEW":
-                item = await asyncio.to_thread(source_service.probe, item["id"])
+                item = await _run_source_probe(item["id"])
             if item["status"] == "NEEDS_ADAPTER":
                 needs_update += 1
             updated.append(item)
@@ -115,6 +123,6 @@ def refresh_sources():
 @router.post("/{source_id}/probe")
 async def probe_source(source_id: str):
     try:
-        return await asyncio.to_thread(source_service.probe, source_id)
+        return await _run_source_probe(source_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Không tìm thấy nguồn") from exc

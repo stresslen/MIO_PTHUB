@@ -7,6 +7,7 @@ from app.api.scheduler import router as scheduler_router
 from app.api.storage import router as storage_router
 from app.api.keywords import router as keywords_router
 from app.api.scoring import router as scoring_router
+from app.api.stats import router as stats_router
 
 api_router = APIRouter(prefix="/api")
 api_router.include_router(leads_router)
@@ -17,5 +18,6 @@ api_router.include_router(scheduler_router)
 api_router.include_router(storage_router)
 api_router.include_router(keywords_router)
 api_router.include_router(scoring_router)
+api_router.include_router(stats_router)
 
 __all__ = ["api_router"]

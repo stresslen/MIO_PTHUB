@@ -11,13 +11,11 @@ import threading
 from typing import Any
 from urllib.parse import urlparse, urlunparse
 
-import requests
-import urllib3
-from bs4 import BeautifulSoup
-
 from app.config import get_sources_config, settings
+from app.pipeline.normalize import clean_html
+from app.services.browser_crawl_service import browser_crawl_service
+from app.services.priority_service import priority_coordinator
 
-urllib3.disable_warnings()
 logger = logging.getLogger(__name__)
 
 CUSTOM_MAX_PAGES = 200
@@ -338,36 +336,37 @@ class SourceService:
             "total": self.snapshot()["total"],
         }
 
-    def probe(self, source_id: str) -> dict[str, Any]:
+    async def probe(self, source_id: str) -> dict[str, Any]:
         item = self.get(source_id)
         if item is None:
             raise KeyError(source_id)
         url = item["seed_urls"][0]
         item["last_attempt_at"] = _now()
         try:
-            valid, reason = validate_public_url(url)
+            valid, reason = await priority_coordinator.run_blocking(
+                validate_public_url,
+                url,
+                worker_name="Source URL validation",
+            )
             if not valid:
                 raise RuntimeError(reason or "URL không an toàn")
-            response = requests.get(
+            page = await browser_crawl_service.fetch(
                 url,
-                timeout=min(item["timeout"], 15),
-                headers={"User-Agent": settings.crawler_user_agent},
-                allow_redirects=True,
-                verify=False,
+                timeout=min(item["timeout"], 30),
+                source_id=source_id,
             )
-            final_valid, final_reason = validate_public_url(response.url)
+            final_valid, final_reason = await priority_coordinator.run_blocking(
+                validate_public_url,
+                page.url,
+                worker_name="Source redirected URL validation",
+            )
             if not final_valid:
                 raise RuntimeError(final_reason or "Redirect không an toàn")
-            if response.status_code < 200 or response.status_code >= 300:
-                raise RuntimeError(f"HTTP {response.status_code}")
-            content_type = (response.headers.get("Content-Type") or "").lower()
+            content_type = (page.headers.get("Content-Type") or "").lower()
             if content_type and not any(value in content_type for value in ("html", "xml", "text")):
                 raise RuntimeError("Nguồn không trả về HTML")
-            soup = BeautifulSoup(response.text, "html.parser")
-            for node in soup(["script", "style", "noscript", "template", "svg"]):
-                node.decompose()
-            if len(" ".join(soup.stripped_strings)) < 80:
-                raise RuntimeError("Trang không có đủ nội dung HTML tĩnh")
+            if len(clean_html(page.html)) < 80:
+                raise RuntimeError("Trang không có đủ nội dung sau khi render JavaScript")
             item.update(
                 enabled=True,
                 status="READY",
@@ -384,7 +383,11 @@ class SourceService:
                 last_error=ERROR_NOTICE,
                 updated_at=_now(),
             )
-        self._store(item)
+        await priority_coordinator.run_blocking(
+            self._store,
+            item,
+            worker_name="Save source probe status",
+        )
         return item
 
     def record_status(self, source_id: str, status: str, error: Exception | str | None = None) -> None:

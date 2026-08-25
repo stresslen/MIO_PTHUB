@@ -7,22 +7,18 @@ import json
 import logging
 import math
 import re
-import ssl
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote_plus, urljoin, urlparse
-import requests
-import urllib3
 from bs4 import BeautifulSoup
 from pydantic import BaseModel, Field
 
 from app.config import RAW_DATA_DIR, settings
+from app.services.browser_crawl_service import browser_crawl_service
 from app.services.keyword_service import keyword_service
-from app.services.priority_service import priority_coordinator
 from app.pipeline.normalize import canonicalize_url, clean_html, normalize_unicode, parse_datetime, utc_now
 
-urllib3.disable_warnings()
 logger = logging.getLogger(__name__)
 
 
@@ -131,20 +127,6 @@ def extract_published_at(soup: Any, raw_text: str = "", title: str = "") -> Opti
     return None
 
 
-class CustomSSLAdapter(requests.adapters.HTTPAdapter):
-    """
-    SSL Adapter that supports older Diffie-Hellman ciphers used on some
-    government portals (e.g. muasamcong.mpi.gov.vn) without compromising safety.
-    """
-    def init_poolmanager(self, *args, **kwargs):
-        ctx = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-        ctx.set_ciphers("DEFAULT:@SECLEVEL=1")
-        kwargs["ssl_context"] = ctx
-        return super().init_poolmanager(*args, **kwargs)
-
-
 class RawDocument(BaseModel):
     url: str
     source_id: str
@@ -169,8 +151,8 @@ class ParsedItem(BaseModel):
 class SourceAdapter(ABC):
     """
     Abstract Base Class for Lead Source Adapters.
-    Fetches real live data with retries, custom SSL handling, rate limits,
-    and automatic raw snapshot persistence for auditability.
+    Fetches rendered HTML through Crawl4AI with retries, rate limits, and raw
+    snapshot persistence for auditability.
     """
 
     def __init__(
@@ -186,21 +168,6 @@ class SourceAdapter(ABC):
         self.seed_urls = seed_urls
         self.rate_limit_delay = rate_limit_delay
         self.timeout = timeout
-        self._session: Optional[requests.Session] = None
-
-    def _get_session(self) -> requests.Session:
-        if self._session is None:
-            sess = requests.Session()
-            adapter = CustomSSLAdapter()
-            sess.mount("https://", adapter)
-            sess.mount("http://", adapter)
-            sess.headers.update({
-                "User-Agent": settings.crawler_user_agent,
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7",
-            })
-            self._session = sess
-        return self._session
 
     @abstractmethod
     async def discover(self, since: Optional[datetime.datetime] = None, max_items: Optional[int] = None) -> List[str]:
@@ -294,50 +261,43 @@ class SourceAdapter(ABC):
 
     async def fetch(self, url: str) -> RawDocument:
         """
-        Fetch live page content with retry, exponential backoff, rate limiting,
-        and raw snapshot storage.
+        Render live HTML/JavaScript with Crawl4AI, then preserve the existing
+        RawDocument contract used by discovery, parsing and the AI pipeline.
         """
         url = canonicalize_url(url)
         await asyncio.sleep(self.rate_limit_delay)
 
-        session = self._get_session()
         last_error: Optional[Exception] = None
 
         for attempt in range(settings.max_retries + 1):
             try:
-                def _do_get():
-                    resp = session.get(url, timeout=self.timeout, verify=False)
-                    resp.encoding = resp.apparent_encoding or "utf-8"
-                    return resp.text, resp.status_code, dict(resp.headers)
-
-                html_text, status_code, resp_headers = await priority_coordinator.run_blocking(
-                    _do_get, worker_name=f"HTTP fetch {self.source_id}"
+                page = await browser_crawl_service.fetch(
+                    url,
+                    timeout=self.timeout,
+                    source_id=self.source_id,
                 )
-                
-                if status_code in (200, 201, 202):
-                    clean_txt = clean_html(html_text)
-                    snapshot_path = self._save_snapshot(url, html_text)
-                    return RawDocument(
-                        url=url,
-                        source_id=self.source_id,
-                        html=html_text,
-                        text=clean_txt,
-                        headers=resp_headers,
-                        status_code=status_code,
-                        snapshot_path=str(snapshot_path),
-                    )
-                elif 400 <= status_code < 500:
-                    logger.warning(f"[{self.source_id}] HTTP status {status_code} for {url} (skipping retry)")
-                    break
-                else:
-                    logger.warning(f"[{self.source_id}] HTTP status {status_code} for {url}")
+                clean_txt = clean_html(page.html)
+                snapshot_path = self._save_snapshot(page.url, page.html)
+                return RawDocument(
+                    url=page.url,
+                    source_id=self.source_id,
+                    html=page.html,
+                    text=clean_txt,
+                    headers=page.headers,
+                    status_code=page.status_code,
+                    snapshot_path=str(snapshot_path),
+                )
 
             except Exception as e:
                 last_error = e
                 err_str = str(e).lower()
                 logger.warning(f"[{self.source_id}] Attempt {attempt + 1} failed for {url}: {e}")
                 # If network is unreachable or host not found, fail fast instead of blocking
-                if any(k in err_str for k in ["network is unreachable", "nameresolutionerror", "connection refused", "getaddrinfo"]):
+                if any(k in err_str for k in [
+                    "network is unreachable", "nameresolutionerror", "connection refused",
+                    "getaddrinfo", "http 400", "http 401", "http 403", "http 404",
+                    "http 405", "http 410", "http 422",
+                ]):
                     logger.info(f"[{self.source_id}] Host is unreachable ({e}), skipping further retries.")
                     break
                 if attempt < settings.max_retries:

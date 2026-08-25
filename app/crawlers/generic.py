@@ -75,18 +75,6 @@ class GenericWebsiteAdapter(SourceAdapter):
             return False
         return parsed.scheme in {"http", "https"}
 
-    def _get_session(self):
-        session = super()._get_session()
-        if not getattr(session, "_mio_redirect_guard", False):
-            def validate_redirect(response, *args, **kwargs):
-                if not self._allowed_url(response.url):
-                    raise RuntimeError("Redirect ra ngoài domain hoặc tới địa chỉ không an toàn")
-                return response
-
-            session.hooks.setdefault("response", []).append(validate_redirect)
-            session._mio_redirect_guard = True
-        return session
-
     async def fetch(self, url: str) -> RawDocument:
         clean_url = canonicalize_url(url)
         if not self._allowed_url(clean_url):
@@ -95,6 +83,8 @@ class GenericWebsiteAdapter(SourceAdapter):
         if cached is not None:
             return cached
         document = await super().fetch(clean_url)
+        if not self._allowed_url(document.url):
+            raise RuntimeError("Redirect ra ngoài domain hoặc tới địa chỉ không an toàn")
         self._document_cache[clean_url] = document
         return document
 

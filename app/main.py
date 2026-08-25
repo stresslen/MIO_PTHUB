@@ -116,10 +116,12 @@ def create_app() -> FastAPI:
         logger.info("System initialized successfully.")
 
     @app.on_event("shutdown")
-    def on_shutdown():
+    async def on_shutdown():
         logger.info("Stopping automated daily background scheduler...")
         from app.services.scheduler_service import scheduler_service
         scheduler_service.stop()
+        from app.services.browser_crawl_service import browser_crawl_service
+        await browser_crawl_service.close()
 
     # Include API Routes
     app.include_router(api_router)

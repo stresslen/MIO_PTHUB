@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import inspect
 import json
 import logging
 import re
@@ -20,6 +21,7 @@ from app.crawlers.generic import GenericWebsiteAdapter
 from app.models.organization import Organization, OrganizationContact, OrganizationEvidence
 from app.pipeline.extract import AIAuthenticationError, AIQuotaOrAPIError, ai_extractor
 from app.pipeline.normalize import canonicalize_url, normalize_phone_numbers, normalize_unicode, utc_now
+from app.services.browser_crawl_service import browser_crawl_service
 from app.services.source_service import validate_public_url
 from app.services.priority_service import priority_coordinator
 from app.services.xah_search_service import xah_search_service
@@ -172,12 +174,57 @@ Trả duy nhất JSON: {{"queries":["2 đến 3 truy vấn tiếng Việt có t�
                 errors.append(f"{query}: {exc}")
         return results, errors
 
-    def _load_search_urls(self, results: list[dict[str, Any]]) -> tuple[list[dict[str, str]], list[str]]:
+    async def _fetch_rendered_public_page(
+        self, url: str, max_chars: int = 12000
+    ) -> dict[str, str]:
+        current = canonicalize_url(url)
+        valid, reason = await priority_coordinator.run_blocking(
+            validate_public_url,
+            current,
+            resolve_dns=True,
+            worker_name="Company result URL validation",
+        )
+        if not valid:
+            raise RuntimeError(reason or "URL không an toàn")
+        page = await browser_crawl_service.fetch(
+            current,
+            timeout=min(settings.crawl_timeout_seconds, 30),
+            source_id="company-xah-result",
+        )
+        valid, reason = await priority_coordinator.run_blocking(
+            validate_public_url,
+            page.url,
+            resolve_dns=True,
+            worker_name="Company redirected URL validation",
+        )
+        if not valid:
+            raise RuntimeError(reason or "Redirect tới URL không an toàn")
+        soup = BeautifulSoup(page.html, "html.parser")
+        title_node = soup.find("title")
+        title = normalize_unicode(
+            title_node.get_text(" ", strip=True) if title_node else page.url
+        )[:500]
+        content_node = soup.find("article") or soup.find("main") or soup.body or soup
+        text = normalize_unicode(content_node.get_text(" ", strip=True))[:max_chars]
+        if len(text) < 40:
+            raise RuntimeError("Trang không có đủ nội dung sau khi render JavaScript")
+        return {"url": page.url, "title": title, "text": text}
+
+    async def _load_search_urls(self, results: list[dict[str, Any]]) -> tuple[list[dict[str, str]], list[str]]:
         pages, errors = [], []
         limit = settings.xah_max_results * max(1, settings.company_xah_max_queries)
         for item in results[:limit]:
             try:
-                pages.append(self._fetch_public_page(item["url"]))
+                url = str(item["url"])
+                if urlparse(url).path.lower().endswith(".pdf"):
+                    page = await priority_coordinator.run_blocking(
+                        self._fetch_public_page,
+                        url,
+                        worker_name="Company search PDF fetch",
+                    )
+                else:
+                    page = await self._fetch_rendered_public_page(url)
+                pages.append(page)
             except Exception as exc:
                 errors.append(f"{item['url']}: {exc}")
         return pages, errors
@@ -535,9 +582,10 @@ Trả duy nhất JSON:
                     results, search_errors = await priority_coordinator.run_blocking(
                         self._search_queries, queries, worker_name="Company XAH search"
                     )
-                    pages, fetch_errors = await priority_coordinator.run_blocking(
-                        self._load_search_urls, results, worker_name="Company search URL fetch"
-                    )
+                    loaded_pages = self._load_search_urls(results)
+                    if inspect.isawaitable(loaded_pages):
+                        loaded_pages = await loaded_pages
+                    pages, fetch_errors = loaded_pages
                     all_urls.extend(item["url"] for item in results)
                     all_urls.extend(item["url"] for item in pages)
                     if not results:
