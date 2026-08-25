@@ -42,6 +42,21 @@ def setup_test_db():
         enrichment_status="PROFILE_INCOMPLETE",
     )
     db.merge(lead)
+    db.merge(Lead(
+        id="test-low-score-lead",
+        source="topcv",
+        source_url="https://www.topcv.vn/viec-lam/chuyen-doi-so/123456.html",
+        title="Tuyển chuyên viên chuyển đổi số",
+        organization_name="Công ty thử nghiệm",
+        organization_type="enterprise",
+        need_summary="Tuyển nhân sự triển khai chuyển đổi số.",
+        need_categories=["Chuyển đổi số"],
+        score=20,
+        recommended_action="NURTURE",
+        score_reasons=["Tín hiệu tuyển dụng liên quan keyword"],
+        content_fingerprint="test_low_score_fingerprint",
+        status="NEW",
+    ))
     db.commit()
     db.close()
 
@@ -53,6 +68,7 @@ def setup_module(module):
 def teardown_module(module):
     """Clean up test lead from database after tests finish."""
     db = SessionLocal()
+    db.query(Lead).filter(Lead.id == "test-low-score-lead").delete()
     test_lead = db.query(Lead).filter(Lead.id == "test-lead-1234").first()
     if test_lead:
         db.delete(test_lead)
@@ -91,6 +107,12 @@ def test_filter_leads_by_action():
         assert item["recommended_action"] == "CALL"
 
 
+def test_low_score_keyword_lead_is_visible():
+    response = TestClient(app).get("/api/leads?query=Tuyển chuyên viên chuyển đổi số")
+    assert response.status_code == 200
+    assert any(item["id"] == "test-low-score-lead" for item in response.json()["items"])
+
+
 def test_get_lead_detail_api():
     client = TestClient(app)
     resp = client.get("/api/leads/test-lead-1234")
@@ -114,7 +136,7 @@ def test_sources_api():
     resp = client.get("/api/sources")
     assert resp.status_code == 200
     sources = resp.json()
-    assert len(sources) == 11
+    assert len(sources) == 12
     assert all(source["base_url"].startswith("https://") for source in sources)
     assert all("total_leads_count" in source for source in sources)
 

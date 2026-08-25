@@ -141,17 +141,10 @@ class GoogleSheetsService:
             else lambda key, default=None: getattr(item, key, default)
         )
         status = str(getter("status", "") or "").upper()
-        organization = str(getter("organization_name", "") or "").strip().lower()
         summary = str(getter("need_summary", "") or "").strip().lower()
-        try:
-            score = float(getter("score", 0) or 0)
-        except (TypeError, ValueError):
-            score = 0
         return bool(
             status != "PENDING_AI"
-            and organization not in {"", "đang chờ ai bóc tách", "đang cập nhật"}
             and not summary.startswith("[hàng đợi ai]")
-            and score >= 40
         )
 
     def _worksheet(self, title: str, headers: list[str]):

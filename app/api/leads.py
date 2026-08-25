@@ -30,7 +30,7 @@ def get_leads(
     location: Optional[str] = Query(None, description="Filter by location (e.g. Hà Nội)"),
     category: Optional[str] = Query(None, description="Filter by category"),
     query: Optional[str] = Query(None, description="Search term in title, need, or org"),
-    include_archived: bool = Query(False, description="Include low score/archived leads (<40)"),
+    include_archived: bool = Query(False, description="Include archived leads"),
     page: int = Query(1, ge=1, description="Page number"),
     page_size: int = Query(20, ge=1, le=100, description="Items per page"),
     sort_by: str = Query("score", description="Sort field: score, crawled_at, published_at, budget_value"),

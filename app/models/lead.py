@@ -163,7 +163,7 @@ class LeadFilterParams(BaseModel):
     category: Optional[str] = None
     location: Optional[str] = None
     query: Optional[str] = None
-    include_archived: bool = False  # False means only show score >= 40 on dashboard
+    include_archived: bool = False  # False hides only explicitly archived records.
     page: int = 1
     page_size: int = 20
     sort_by: str = "score"  # score, crawled_at, published_at, budget_value

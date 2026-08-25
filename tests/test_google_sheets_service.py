@@ -102,3 +102,12 @@ def test_pending_ai_is_never_written_to_google_sheets(monkeypatch):
     service = GoogleSheetsService()
     assert service.upsert_lead(pending) is False
     assert service._is_ai_processed(pending) is False
+
+
+def test_ai_processed_low_score_is_written_to_google_sheets():
+    lead = make_lead("low-score-id")
+    lead.score = 0
+    lead.organization_name = None
+    lead.need_summary = None
+
+    assert GoogleSheetsService._is_ai_processed(lead) is True

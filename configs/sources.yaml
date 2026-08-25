@@ -122,3 +122,13 @@ sources:
       - "https://www.linkedin.com/search/results/content/"
     rate_limit_delay: 0
     timeout: 9000
+
+  - id: topcv
+    name: "TopCV · Việc làm chuyển đổi số"
+    description: "Tìm tín hiệu tuyển dụng theo keyword bằng Crawl4AI/Playwright"
+    enabled: true
+    adapter: "app.crawlers.topcv.TopCVAdapter"
+    seed_urls:
+      - "https://www.topcv.vn/tim-viec-lam-chuyen-doi-so?type_keyword=1&sba=1"
+    rate_limit_delay: 0.5
+    timeout: 90

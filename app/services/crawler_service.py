@@ -211,10 +211,6 @@ class CrawlerService:
                         source=source_id,
                         raise_on_api_error=True,
                     )
-                    if not extracted.organization_name or not extracted.need_summary:
-                        crawl_run.filtered_out += 1
-                        logger.info("[%s] Bỏ qua vì vòng 1 thiếu organization_name hoặc need_summary: %s", source_id, url)
-                        continue
                     enrichment = await self._enrich_company(extracted)
 
                     # Merge only categories actually found by keyword matching or AI.
@@ -238,12 +234,7 @@ class CrawlerService:
                         raw_evidence=extracted.evidence,
                     )
 
-                    # 8. Persist Lead to DB only if Qualified (Score >= 40)
-                    if score_res.total_score < 40:
-                        crawl_run.filtered_out += 1
-                        logger.info(f"[{source_id}] 🚫 Bản tin không đạt chuẩn ({score_res.total_score} điểm < 40), bỏ qua không lưu: '{parsed.title[:45]}...'")
-                        continue
-
+                    # 8. Persist every keyword-related item successfully processed by AI.
                     lead = Lead(
                         source=source_id,
                         source_url=url,
@@ -291,7 +282,7 @@ class CrawlerService:
                             organization.id,
                             worker_name="Google Sheets organization upsert",
                         )
-                    logger.info(f"[{source_id}] ✅ Đã lưu Lead đạt chuẩn: '{parsed.title[:40]}...' (Score: {score_res.total_score} - {score_res.recommended_action})")
+                    logger.info(f"[{source_id}] ✅ Đã lưu bài liên quan sau AI: '{parsed.title[:40]}...' (Score: {score_res.total_score} - {score_res.recommended_action})")
 
                 except AIAuthenticationError as auth_err:
                     db.rollback()
@@ -390,9 +381,6 @@ class CrawlerService:
                     content = lead.title
 
                 extracted = await self._extract_with_priority(lead.title, content, source=lead.source, raise_on_api_error=True)
-                if not extracted.organization_name or not extracted.need_summary:
-                    logger.warning("[QueueWorker] Vòng 1 thiếu tổ chức hoặc nhu cầu; giữ trạng thái chưa hoàn thiện: %s", lead.id)
-                    continue
                 enrichment = await self._enrich_company(extracted)
                 combined_cats = list(set((lead.need_categories or []) + extracted.need_categories))
 
@@ -412,12 +400,6 @@ class CrawlerService:
                 )
 
                 lead.organization_type = extracted.organization_type or "other"
-                if score_res.total_score < 40:
-                    db.delete(lead)
-                    db.commit()
-                    logger.info(f"[QueueWorker] 🗑️ Đã xóa bản tin trong hàng đợi do điểm không đạt chuẩn ({score_res.total_score} < 40): '{lead.title[:45]}'")
-                    continue
-
                 lead.organization_name = extracted.organization_name
                 lead.organization_type = extracted.organization_type or lead.organization_type
                 lead.need_summary = extracted.need_summary
@@ -452,7 +434,7 @@ class CrawlerService:
                         worker_name="Google Sheets organization upsert",
                     )
                 processed_count += 1
-                logger.info(f"[QueueWorker] ✅ Đã xử lý xong lead đạt chuẩn trong hàng đợi: '{lead.title[:40]}' (Score: {score_res.total_score})")
+                logger.info(f"[QueueWorker] ✅ Đã xử lý xong bài liên quan trong hàng đợi: '{lead.title[:40]}' (Score: {score_res.total_score})")
 
             except AIQuotaOrAPIError as q_err:
                 logger.warning(f"[QueueWorker] Hạn mức API chưa mở lại: {q_err}. Tạm dừng xử lý hàng đợi.")
@@ -600,10 +582,6 @@ class CrawlerService:
 
                         # AI Extraction (round 1), then verified organization enrichment (round 2).
                         extracted = await self._extract_with_priority(parsed.title, parsed.raw_content, source=source_id, raise_on_api_error=True)
-                        if not extracted.organization_name or not extracted.need_summary:
-                            run.filtered_out += 1
-                            logger.info("[%s] Bỏ qua vì vòng 1 thiếu organization_name hoặc need_summary: %s", source_id, url)
-                            continue
                         enrichment = await self._enrich_company(extracted)
                         combined_categories = list(set(matched_cats + extracted.need_categories))
 
@@ -623,12 +601,7 @@ class CrawlerService:
                             raw_evidence=extracted.evidence,
                         )
 
-                        # Only Persist Lead if Qualified (Score >= 40)
-                        if score_res.total_score < 40:
-                            run.filtered_out += 1
-                            logger.info(f"[{source_id}] 🚫 Bản tin không đạt chuẩn ({score_res.total_score} điểm < 40), bỏ qua không lưu: '{parsed.title[:45]}...'")
-                            continue
-
+                        # Persist every keyword-related item successfully processed by AI.
                         lead = Lead(
                             source=source_id,
                             source_url=url,
@@ -676,7 +649,7 @@ class CrawlerService:
                                 organization.id,
                                 worker_name="Google Sheets organization upsert",
                             )
-                        logger.info(f"[{source_id}] ✅ Đã lưu Lead đạt chuẩn: '{parsed.title[:40]}...' (Score: {score_res.total_score} - {score_res.recommended_action})")
+                        logger.info(f"[{source_id}] ✅ Đã lưu bài liên quan sau AI: '{parsed.title[:40]}...' (Score: {score_res.total_score} - {score_res.recommended_action})")
 
                     except AIAuthenticationError as auth_err:
                         db.rollback()

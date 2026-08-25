@@ -30,12 +30,9 @@ class LeadService:
         elif not params.include_archived:
             query = query.filter(Lead.status != LeadStatusEnum.ARCHIVED.value)
 
-        # 4. Filter by Score Range (Default to score >= 40 if not include_archived)
+        # 4. Score filters are only applied when explicitly requested.
         if params.min_score is not None:
             query = query.filter(Lead.score >= params.min_score)
-        elif not params.include_archived:
-            query = query.filter(Lead.score >= 40)
-
         if params.max_score is not None:
             query = query.filter(Lead.score <= params.max_score)
 
@@ -90,31 +87,29 @@ class LeadService:
 
     @staticmethod
     def get_dashboard_stats(db: Session) -> Dict[str, Any]:
-        # Filter only active qualified leads (score >= 40)
-        active_query = db.query(Lead).filter(Lead.score >= 40, Lead.status != LeadStatusEnum.ARCHIVED.value)
+        # Every non-archived AI-processed lead is visible, regardless of score.
+        active_query = db.query(Lead).filter(Lead.status != LeadStatusEnum.ARCHIVED.value)
         total_leads = active_query.count()
         hot_leads = active_query.filter(Lead.recommended_action == "CALL").count()
         qualified_leads = active_query.filter(Lead.recommended_action == "EMAIL").count()
         nurture_leads = active_query.filter(Lead.recommended_action == "NURTURE").count()
 
-        # Archived/low-score count (stored in DB only)
-        archived_count = db.query(Lead).filter((Lead.score < 40) | (Lead.status == LeadStatusEnum.ARCHIVED.value)).count()
+        archived_count = db.query(Lead).filter(Lead.status == LeadStatusEnum.ARCHIVED.value).count()
 
         # Leads crawled today
         today_start = utc_now().replace(hour=0, minute=0, second=0, microsecond=0)
         leads_today = active_query.filter(Lead.crawled_at >= today_start).count()
 
-        # Average score of visualized leads
-        avg_score_res = db.query(func.avg(Lead.score)).filter(Lead.score >= 40).scalar() or 0.0
+        # Aggregate only the same visible dataset.
+        avg_score_res = active_query.with_entities(func.avg(Lead.score)).scalar() or 0.0
         avg_score = round(float(avg_score_res), 1)
 
-        # Total pipeline budget
-        total_budget_res = db.query(func.sum(Lead.budget_value)).filter(Lead.score >= 40).scalar() or 0.0
+        total_budget_res = active_query.with_entities(func.sum(Lead.budget_value)).scalar() or 0.0
 
         # Breakdown by Source
         source_counts = (
             db.query(Lead.source, func.count(Lead.id))
-            .filter(Lead.score >= 40)
+            .filter(Lead.status != LeadStatusEnum.ARCHIVED.value)
             .group_by(Lead.source)
             .all()
         )

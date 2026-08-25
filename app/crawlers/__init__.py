@@ -9,6 +9,7 @@ from app.crawlers.tech_news import VietnamNetAdapter, VnExpressAdapter, MostGovA
 from app.crawlers.hanoi_gov import HanoiGovAdapter
 from app.crawlers.generic import GenericWebsiteAdapter
 from app.crawlers.linkedin_apify import LinkedInApifyAdapter
+from app.crawlers.topcv import TopCVAdapter
 from app.services.source_service import source_service
 
 CRAWLER_REGISTRY: Dict[str, Type[SourceAdapter]] = {
@@ -23,6 +24,7 @@ CRAWLER_REGISTRY: Dict[str, Type[SourceAdapter]] = {
     "vnexpress": VnExpressAdapter,
     "hanoi_gov": HanoiGovAdapter,
     "linkedin_apify": LinkedInApifyAdapter,
+    "topcv": TopCVAdapter,
 }
 
 ADAPTER_REGISTRY = CRAWLER_REGISTRY
