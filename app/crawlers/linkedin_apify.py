@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import datetime
 import json
 import logging
@@ -11,6 +10,7 @@ from app.crawlers.base import ParsedItem, RawDocument, SourceAdapter
 from app.pipeline.normalize import normalize_unicode, parse_datetime, utc_now
 from app.services.keyword_service import keyword_service
 from app.services.linkedin_settings_service import linkedin_settings_service
+from app.services.priority_service import priority_coordinator
 
 logger = logging.getLogger(__name__)
 
@@ -222,7 +222,9 @@ class LinkedInApifyAdapter(SourceAdapter):
             len(keywords),
             self.max_posts_per_keyword,
         )
-        items = await asyncio.to_thread(self._run_actor, run_input)
+        items = await priority_coordinator.run_blocking(
+            self._run_actor, run_input, worker_name="LinkedIn Apify actor"
+        )
 
         self._items_by_url = {}
         urls: list[str] = []

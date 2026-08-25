@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import io
 import json
@@ -22,6 +21,7 @@ from app.models.organization import Organization, OrganizationContact, Organizat
 from app.pipeline.extract import AIAuthenticationError, AIQuotaOrAPIError, ai_extractor
 from app.pipeline.normalize import canonicalize_url, normalize_phone_numbers, normalize_unicode, utc_now
 from app.services.source_service import validate_public_url
+from app.services.priority_service import priority_coordinator
 from app.services.xah_search_service import xah_search_service
 
 logger = logging.getLogger(__name__)
@@ -348,7 +348,12 @@ Ngày đăng: {item.get("published_at") or "không có"}''')
             if remaining <= 0:
                 break
             try:
-                page = await asyncio.to_thread(self._fetch_public_page, pdf_url, min(12000, remaining))
+                page = await priority_coordinator.run_blocking(
+                    self._fetch_public_page,
+                    pdf_url,
+                    min(12000, remaining),
+                    worker_name="Company profile PDF fetch",
+                )
                 blocks.append(f"URL: {page['url']}\nTiêu đề: {page['title']}\nNội dung PDF: {page['text']}")
                 used.append(page["url"])
                 remaining -= len(page["text"])
@@ -468,7 +473,12 @@ Trả duy nhất JSON:
         official_url = canonicalize_url(str(organization_website or ""))
         confidence, notes, xah_used = 0.0, [], False
         if official_url:
-            valid, reason = validate_public_url(official_url, resolve_dns=True)
+            valid, reason = await priority_coordinator.run_blocking(
+                validate_public_url,
+                official_url,
+                resolve_dns=True,
+                worker_name="Company website validation",
+            )
             if valid:
                 official_url, confidence = self._root_url(official_url), 1.0
             else:
@@ -478,12 +488,14 @@ Trả duy nhất JSON:
                 "[company_enrichment] Gemini vòng 1 không cung cấp URL; chuyển keyword sang XAH cho %s",
                 name,
             )
-            return self._enrich_from_xah(
+            return await priority_coordinator.run_blocking(
+                self._enrich_from_xah,
                 name,
                 organization_type,
                 organization_tax_code,
                 location,
                 notes,
+                worker_name="Company XAH enrichment",
             )
 
         logger.info("[company_enrichment] Website chính thức đã xác minh: %s (confidence=%.2f)", official_url, confidence)
@@ -499,8 +511,13 @@ Trả duy nhất JSON:
         initial_data, extraction_error = {}, None
         if not crawl_error:
             try:
-                initial_data = ai_extractor._call_gemini_json(self._profile_prompt(
-                    name, organization_type, organization_tax_code, official_url, website_context))
+                initial_data = await priority_coordinator.run_blocking(
+                    ai_extractor._call_gemini_json,
+                    self._profile_prompt(
+                        name, organization_type, organization_tax_code, official_url, website_context
+                    ),
+                    worker_name="Company profile Gemini extraction",
+                )
             except Exception as exc:
                 extraction_error = str(exc)
         profile, contacts, evidence, missing = self._normalize_profile(initial_data, name, official_url, crawled_urls)
@@ -515,16 +532,25 @@ Trả duy nhất JSON:
             else:
                 try:
                     queries = self._make_queries(name, organization_tax_code, location, missing)
-                    results, search_errors = self._search_queries(queries)
-                    pages, fetch_errors = self._load_search_urls(results)
+                    results, search_errors = await priority_coordinator.run_blocking(
+                        self._search_queries, queries, worker_name="Company XAH search"
+                    )
+                    pages, fetch_errors = await priority_coordinator.run_blocking(
+                        self._load_search_urls, results, worker_name="Company search URL fetch"
+                    )
                     all_urls.extend(item["url"] for item in results)
                     all_urls.extend(item["url"] for item in pages)
                     if not results:
                         supplemental_error = "; ".join(search_errors) or "XAH không trả URL bổ sung"
                     else:
-                        final_data = ai_extractor._call_gemini_json(self._profile_prompt(
-                            name, organization_type, organization_tax_code, official_url, website_context,
-                            self._candidate_context(results, pages)))
+                        final_data = await priority_coordinator.run_blocking(
+                            ai_extractor._call_gemini_json,
+                            self._profile_prompt(
+                                name, organization_type, organization_tax_code, official_url, website_context,
+                                self._candidate_context(results, pages),
+                            ),
+                            worker_name="Company supplemental Gemini extraction",
+                        )
                         profile, contacts, evidence, missing = self._normalize_profile(final_data, name, official_url, all_urls)
                         notes.extend((search_errors + fetch_errors)[:3])
                 except Exception as exc:

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import datetime
 import logging
 from pathlib import Path
@@ -88,6 +87,22 @@ class CrawlerService:
         self._merge_company_contact(extracted, result)
         return result
 
+    async def _extract_with_priority(self, title: str, content: str, **kwargs):
+        return await priority_coordinator.run_blocking(
+            ai_extractor.extract,
+            title,
+            content,
+            worker_name="Gemini extraction",
+            **kwargs,
+        )
+
+    async def _score_with_priority(self, **kwargs):
+        return await priority_coordinator.run_blocking(
+            scoring_engine.evaluate,
+            worker_name="Gemini scoring and sales",
+            **kwargs,
+        )
+
     async def run_crawler_for_source(
         self,
         source_id: str,
@@ -139,6 +154,8 @@ class CrawlerService:
 
         try:
             logger.info(f"[{source_id}] Starting live crawl (timeframe={timeframe}, is_manual_fe={is_manual_fe})...")
+            if not is_manual_fe:
+                await priority_coordinator.yield_if_fe_active(f"Crawl discovery {source_id}")
             # 1. Discover live URLs with timeframe filter
             discovery_limit = CUSTOM_MAX_PAGES if getattr(adapter, "is_generic", False) else None
             discovered_urls = await adapter.discover(since=since, max_items=discovery_limit)
@@ -188,7 +205,7 @@ class CrawlerService:
                         continue
 
                     # 6. AI Extraction is mandatory; failures never create a lead.
-                    extracted = ai_extractor.extract(
+                    extracted = await self._extract_with_priority(
                         parsed.title,
                         parsed.raw_content,
                         source=source_id,
@@ -207,7 +224,7 @@ class CrawlerService:
                     deadline_dt = parse_datetime(extracted.deadline) if extracted.deadline else None
 
                     # 7. Lead Scoring (AI / Rule-based)
-                    score_res = scoring_engine.evaluate(
+                    score_res = await self._score_with_priority(
                         title=parsed.title,
                         need_summary=extracted.need_summary,
                         need_categories=combined_categories,
@@ -263,9 +280,17 @@ class CrawlerService:
                     crawl_run.new_leads += 1
                     db.commit()
                     db.refresh(lead)
-                    await asyncio.to_thread(google_sheets_service.upsert_lead, lead)
+                    await priority_coordinator.run_blocking(
+                        google_sheets_service.upsert_lead,
+                        lead,
+                        worker_name="Google Sheets lead upsert",
+                    )
                     if organization is not None:
-                        await asyncio.to_thread(google_sheets_service.upsert_organization_profile, organization.id)
+                        await priority_coordinator.run_blocking(
+                            google_sheets_service.upsert_organization_profile,
+                            organization.id,
+                            worker_name="Google Sheets organization upsert",
+                        )
                     logger.info(f"[{source_id}] ✅ Đã lưu Lead đạt chuẩn: '{parsed.title[:40]}...' (Score: {score_res.total_score} - {score_res.recommended_action})")
 
                 except AIAuthenticationError as auth_err:
@@ -364,7 +389,7 @@ class CrawlerService:
                 if not content:
                     content = lead.title
 
-                extracted = ai_extractor.extract(lead.title, content, source=lead.source, raise_on_api_error=True)
+                extracted = await self._extract_with_priority(lead.title, content, source=lead.source, raise_on_api_error=True)
                 if not extracted.organization_name or not extracted.need_summary:
                     logger.warning("[QueueWorker] Vòng 1 thiếu tổ chức hoặc nhu cầu; giữ trạng thái chưa hoàn thiện: %s", lead.id)
                     continue
@@ -372,7 +397,7 @@ class CrawlerService:
                 combined_cats = list(set((lead.need_categories or []) + extracted.need_categories))
 
                 deadline_dt = parse_datetime(extracted.deadline) if extracted.deadline else None
-                score_res = scoring_engine.evaluate(
+                score_res = await self._score_with_priority(
                     title=lead.title,
                     need_summary=extracted.need_summary,
                     need_categories=combined_cats,
@@ -415,9 +440,17 @@ class CrawlerService:
                 organization = company_enrichment_service.persist(db, lead, enrichment)
                 db.commit()
                 db.refresh(lead)
-                await asyncio.to_thread(google_sheets_service.upsert_lead, lead)
+                await priority_coordinator.run_blocking(
+                    google_sheets_service.upsert_lead,
+                    lead,
+                    worker_name="Google Sheets lead upsert",
+                )
                 if organization is not None:
-                    await asyncio.to_thread(google_sheets_service.upsert_organization_profile, organization.id)
+                    await priority_coordinator.run_blocking(
+                        google_sheets_service.upsert_organization_profile,
+                        organization.id,
+                        worker_name="Google Sheets organization upsert",
+                    )
                 processed_count += 1
                 logger.info(f"[QueueWorker] ✅ Đã xử lý xong lead đạt chuẩn trong hàng đợi: '{lead.title[:40]}' (Score: {score_res.total_score})")
 
@@ -566,7 +599,7 @@ class CrawlerService:
                             continue
 
                         # AI Extraction (round 1), then verified organization enrichment (round 2).
-                        extracted = ai_extractor.extract(parsed.title, parsed.raw_content, source=source_id, raise_on_api_error=True)
+                        extracted = await self._extract_with_priority(parsed.title, parsed.raw_content, source=source_id, raise_on_api_error=True)
                         if not extracted.organization_name or not extracted.need_summary:
                             run.filtered_out += 1
                             logger.info("[%s] Bỏ qua vì vòng 1 thiếu organization_name hoặc need_summary: %s", source_id, url)
@@ -576,7 +609,7 @@ class CrawlerService:
 
                         # AI Lead Scoring
                         deadline_dt = parse_datetime(extracted.deadline) if extracted.deadline else None
-                        score_res = scoring_engine.evaluate(
+                        score_res = await self._score_with_priority(
                             title=parsed.title,
                             need_summary=extracted.need_summary,
                             need_categories=combined_categories,
@@ -632,9 +665,17 @@ class CrawlerService:
                         run.new_leads += 1
                         db.commit()
                         db.refresh(lead)
-                        await asyncio.to_thread(google_sheets_service.upsert_lead, lead)
+                        await priority_coordinator.run_blocking(
+                            google_sheets_service.upsert_lead,
+                            lead,
+                            worker_name="Google Sheets lead upsert",
+                        )
                         if organization is not None:
-                            await asyncio.to_thread(google_sheets_service.upsert_organization_profile, organization.id)
+                            await priority_coordinator.run_blocking(
+                                google_sheets_service.upsert_organization_profile,
+                                organization.id,
+                                worker_name="Google Sheets organization upsert",
+                            )
                         logger.info(f"[{source_id}] ✅ Đã lưu Lead đạt chuẩn: '{parsed.title[:40]}...' (Score: {score_res.total_score} - {score_res.recommended_action})")
 
                     except AIAuthenticationError as auth_err:

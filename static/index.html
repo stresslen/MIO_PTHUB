@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&amp;family=Manrope:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/css/style.css?v=2.6.0">
+    <link rel="stylesheet" href="/static/css/style.css?v=2.8.0">
 </head>
 <body>
     <div class="app-shell">
@@ -77,17 +77,7 @@
                         <div class="select-group">
                             <label for="filter-source">Nguồn</label>
                             <select id="filter-source">
-                                <option value="">Tất cả nguồn đang bật</option>
-                                <option value="muasamcong">Mạng Đấu thầu Quốc gia</option>
-                                <option value="dauthau_asia">DauThau.info</option>
-                                <option value="baodauthau">Báo Đấu thầu</option>
-                                <option value="chinhphu">Cổng Chính phủ</option>
-                                <option value="xaydungchinhsach">Xây dựng Chính sách</option>
-                                <option value="congbao">Công báo Chính phủ</option>
-                                <option value="most_gov">Bộ Khoa học &amp; Công nghệ</option>
-                                <option value="vietnamnet">VietnamNet</option>
-                                <option value="vnexpress">VnExpress</option>
-                                <option value="hanoi_gov">Cổng TP. Hà Nội</option>
+                                <option value="">All</option>
                             </select>
                         </div>
                         <div class="select-group">
@@ -191,7 +181,6 @@
                             <div>
                                 <span class="section-kicker">Lịch vận hành</span>
                                 <h2>Thu thập tự động hàng ngày</h2>
-                                <p>Hệ thống rà soát dữ liệu mới từ tất cả nguồn theo giờ Việt Nam.</p>
                             </div>
                         </div>
                         <div class="scheduler-actions">
@@ -228,7 +217,6 @@
                             <span class="section-kicker" id="source-count-kicker">Đang tải nguồn</span>
                             <h2>Danh sách nguồn</h2>
                         </div>
-                        <p>Trạng thái và sản lượng dữ liệu của từng cổng thông tin.</p>
                     </div>
                     <div class="sources-grid" id="sources-grid"></div>
                 </section>
@@ -254,13 +242,11 @@
             <div class="modal-header">
                 <div>
                     <h2 id="scoring-prompt-title">Thiết lập chấm điểm</h2>
-                    <p class="modal-header-note">Lưu riêng tại gemini_scoring_prompt trong worksheet Settings</p>
                 </div>
                 <button class="btn-close" id="btn-close-scoring-prompt" type="button" aria-label="Đóng">×</button>
             </div>
             <form id="scoring-prompt-form">
                 <div class="modal-body prompt-editor-body">
-                    <p class="modal-desc">Quy định cách Gemini tính điểm, giải thích điểm và chọn CALL, EMAIL hoặc NURTURE. Phần kịch bản Sales không được chỉnh tại đây.</p>
                     <div class="prompt-editor-heading">
                         <label for="scoring-prompt-input">Prompt chấm điểm</label>
                         <span id="scoring-prompt-count">0 ký tự</span>
@@ -284,13 +270,11 @@
             <div class="modal-header">
                 <div>
                     <h2 id="sales-prompt-title">Thiết lập kịch bản Sales</h2>
-                    <p class="modal-header-note">Lưu riêng tại gemini_sales_prompt trong worksheet Settings</p>
                 </div>
                 <button class="btn-close" id="btn-close-sales-prompt" type="button" aria-label="Đóng">×</button>
             </div>
             <form id="sales-prompt-form">
                 <div class="modal-body prompt-editor-body">
-                    <p class="modal-desc">Quy định đối tượng, cách mở đầu, câu hỏi khám phá, thông điệp và bước tiếp theo. Phần này không thay đổi tiêu chí chấm điểm.</p>
                     <div class="prompt-editor-heading">
                         <label for="sales-prompt-input">Prompt kịch bản Sales</label>
                         <span id="sales-prompt-count">0 ký tự</span>
@@ -319,21 +303,10 @@
                 <button class="btn-close" id="btn-close-crawl-modal" type="button" aria-label="Đóng">×</button>
             </div>
             <div class="modal-body">
-                <p class="modal-desc">Chọn nguồn và khoảng ngày xuất bản. Dữ liệu mới sẽ được phân tích, chống trùng và lưu vào hệ thống.</p>
                 <div class="form-group">
                     <label for="crawl-source-select">Nguồn thu thập</label>
                     <select id="crawl-source-select" class="form-control">
-                        <option value="">Tất cả nguồn đang bật</option>
-                        <option value="muasamcong">Mạng Đấu thầu Quốc gia</option>
-                        <option value="dauthau_asia">DauThau.info</option>
-                        <option value="baodauthau">Báo Đấu thầu</option>
-                        <option value="chinhphu">Cổng Thông tin Chính phủ</option>
-                        <option value="xaydungchinhsach">Xây dựng Chính sách</option>
-                        <option value="congbao">Công báo Chính phủ</option>
-                        <option value="most_gov">Bộ Khoa học và Công nghệ</option>
-                        <option value="vietnamnet">VietnamNet</option>
-                        <option value="vnexpress">VnExpress</option>
-                        <option value="hanoi_gov">Cổng TP. Hà Nội</option>
+                        <option value="">All</option>
                     </select>
                 </div>
                 <div class="form-group">
@@ -361,30 +334,26 @@
             <div class="modal-header">
                 <div>
                     <h2 id="source-modal-title">Thêm website để crawl</h2>
-                    <p class="modal-header-note">URL được lưu trước khi hệ thống kiểm tra kết nối</p>
                 </div>
                 <button class="btn-close" id="btn-close-source-modal" type="button" aria-label="Đóng">×</button>
             </div>
             <form id="source-form">
                 <div class="modal-body">
-                    <p class="modal-desc">Đặt tên dễ nhận biết cho nguồn, sau đó nhập URL gốc. Hệ thống sẽ crawl trong cùng domain, làm sạch HTML/JavaScript và chuyển nội dung hợp lệ cho AI.</p>
                     <div class="source-fields">
                         <div class="form-group">
                             <label for="source-name-input">Tên trang</label>
                             <input id="source-name-input" class="form-control" type="text" maxlength="120" autocomplete="organization" placeholder="Ví dụ: Báo Tiền Phong" required>
-                            <small class="field-help">Tên này sẽ hiển thị trong danh sách nguồn.</small>
                         </div>
                         <div class="form-group">
                             <label for="source-url-input">URL website</label>
                             <input id="source-url-input" class="form-control" type="url" maxlength="2048" inputmode="url" autocomplete="url" spellcheck="false" placeholder="https://tienphong.vn" required>
-                            <small class="field-help" id="source-url-preview" aria-live="polite">Mỗi lần thêm một URL, hỗ trợ HTTP và HTTPS.</small>
+                            <small class="field-help" id="source-url-preview" aria-live="polite"></small>
                         </div>
                     </div>
                     <label class="keyword-option source-schedule-option">
                         <input id="source-include-schedule" type="checkbox">
                         <span>
                             <strong>Thêm vào lịch crawl hàng ngày</strong>
-                            <small>Nếu tắt, nguồn vẫn được lưu và có thể chạy thủ công.</small>
                         </span>
                     </label>
                     <p class="source-form-status" id="source-form-status" aria-live="assertive"></p>
@@ -402,7 +371,6 @@
             <div class="modal-header">
                 <div>
                     <h2 id="keyword-modal-title">Quản lý từ khóa</h2>
-                    <p class="modal-header-note">Lưu trực tiếp vào worksheet Keywords</p>
                 </div>
                 <button class="btn-close" id="btn-close-keyword-modal" type="button" aria-label="Đóng">×</button>
             </div>
@@ -430,7 +398,7 @@
                             <input id="keyword-use-discovery" type="checkbox">
                             <span>
                                 <strong>Dùng cả cho tìm kiếm trực tiếp</strong>
-                                <small>Mặc định keyword chỉ lọc nội dung. Bật tùy chọn này sẽ tăng số request tới website.</small>
+                                <small>Tìm URL mới tại các nguồn hỗ trợ tìm kiếm.</small>
                             </span>
                         </label>
                     </section>
@@ -440,7 +408,7 @@
                                 <h3 id="keyword-library-title">Đang hoạt động</h3>
                                 <p id="keyword-source-label">Đang đọc dữ liệu...</p>
                             </div>
-                            <button class="btn btn-xs btn-outline" id="btn-refresh-keywords" type="button">Đồng bộ Sheet</button>
+                            <button class="btn btn-xs btn-outline" id="btn-refresh-keywords" type="button">Đồng bộ</button>
                         </div>
                         <label class="keyword-search">
                             <span class="sr-only">Tìm trong danh sách keyword</span>
@@ -448,7 +416,7 @@
                             <input id="keyword-filter" type="search" placeholder="Lọc danh sách hiện tại..." autocomplete="off">
                         </label>
                         <div class="keyword-list" id="keyword-list" aria-live="polite">
-                            <div class="keyword-list-state">Đang tải keyword từ Google Sheets...</div>
+                            <div class="keyword-list-state">Đang tải từ khóa...</div>
                         </div>
                     </section>
                 </div>
@@ -456,7 +424,7 @@
                     <p id="keyword-form-status" aria-live="assertive"></p>
                     <div>
                         <button class="btn btn-quiet" id="btn-cancel-keywords" type="button">Đóng</button>
-                        <button class="btn btn-primary" id="btn-save-keywords" type="submit" disabled>Thêm vào Google Sheets</button>
+                        <button class="btn btn-primary" id="btn-save-keywords" type="submit" disabled>Thêm từ khóa</button>
                     </div>
                 </div>
             </form>
@@ -474,7 +442,6 @@
             </div>
             <form id="schedule-form">
                 <div class="modal-body">
-                    <p class="modal-desc">Hệ thống sẽ chạy một lần mỗi ngày theo múi giờ Việt Nam.</p>
                     <div class="form-group">
                         <label for="schedule-time">Giờ bắt đầu</label>
                         <input id="schedule-time" type="time" value="06:00" step="60" class="form-control time-control" required>
@@ -490,6 +457,6 @@
     </div>
 
     <div class="toast-container" id="toast-container" aria-live="polite"></div>
-    <script src="/static/js/app.js?v=2.6.0"></script>
+    <script src="/static/js/app.js?v=2.8.0"></script>
 </body>
 </html>

@@ -198,6 +198,7 @@ function switchTab(pageId, updateUrl = true) {
     // Load page-specific data
     if (pageId === 'page-leads') {
         loadLeads();
+        if (state.sources.length === 0) loadSources();
     } else if (pageId === 'page-crawlers') {
         loadSources();
         loadSchedulerStatus();
@@ -210,11 +211,11 @@ function switchTab(pageId, updateUrl = true) {
 function showToast(message, type = 'info') {
     const toast = document.createElement('div');
     toast.className = `toast toast-${type}`;
-    
+
     const spanIcon = document.createElement('span');
     spanIcon.className = 'toast-mark';
     spanIcon.setAttribute('aria-hidden', 'true');
-    
+
     const spanText = document.createElement('span');
     spanText.textContent = message;
 
@@ -292,7 +293,7 @@ async function loadLeads() {
 
         const res = await fetch(`/api/leads?${params.toString()}`);
         if (!res.ok) throw new Error('Không thể tải danh sách cơ hội');
-        
+
         const data = await res.json();
         state.leads.items = data.items;
         state.leads.total = data.total;
@@ -453,7 +454,7 @@ async function openPromptModal(promptType) {
     if (!editor.modal || !editor.input) return;
     editor.modal.classList.remove('hidden');
     editor.input.disabled = true;
-    setPromptStatus(promptType, 'Đang tải cấu hình từ Google Sheets…');
+    setPromptStatus(promptType, 'Đang tải…');
     updatePromptCount(promptType);
 
     try {
@@ -465,22 +466,12 @@ async function openPromptModal(promptType) {
         editor.input.value = data.prompt || '';
         state.defaultPrompts[promptType] = data.default_prompt || '';
         editor.input.disabled = false;
-        setPromptStatus(
-            promptType,
-            data.storage === 'google_sheets'
-                ? 'Đang lưu tại ' + data.setting_key + ' trong worksheet Settings.'
-                : 'Đang dùng mặc định vì Google Sheets chưa sẵn sàng.',
-            data.storage === 'google_sheets' ? 'success' : 'warning'
-        );
+        setPromptStatus(promptType);
         updatePromptCount(promptType);
         editor.input.focus();
     } catch (error) {
         editor.input.disabled = true;
-        setPromptStatus(
-            promptType,
-            error.message + '. Kiểm tra worksheet Settings và quyền service account.',
-            'error'
-        );
+        setPromptStatus(promptType, error.message, 'error');
     }
 }
 
@@ -502,7 +493,7 @@ async function savePrompt(promptType, event) {
 
     state.savingPromptType = promptType;
     editor.input.disabled = true;
-    setPromptStatus(promptType, 'Đang lưu vào Google Sheets…');
+    setPromptStatus(promptType, 'Đang lưu…');
     updatePromptCount(promptType);
 
     try {
@@ -768,20 +759,16 @@ async function openLeadModal(lead) {
     if (lead.source_url) {
         const sourceFooter = document.createElement('section');
         sourceFooter.className = 'detail-source-footer';
-        const sourceCopy = document.createElement('div');
-        sourceCopy.className = 'detail-source-copy';
         const sourceTitle = document.createElement('strong');
-        sourceTitle.textContent = 'Dữ liệu gốc của cơ hội';
-        const sourceHint = document.createElement('span');
-        sourceHint.textContent = 'Mở bài viết đã được hệ thống thu thập để đối chiếu.';
-        sourceCopy.append(sourceTitle, sourceHint);
+        sourceTitle.textContent = 'Nguồn tham chiếu';
+
         const sourceLink = document.createElement('a');
         sourceLink.className = 'btn btn-source-origin';
         sourceLink.href = lead.source_url;
         sourceLink.target = '_blank';
         sourceLink.rel = 'noopener noreferrer';
         sourceLink.textContent = 'Xem nguồn gốc';
-        sourceFooter.append(sourceCopy, sourceLink);
+        sourceFooter.append(sourceTitle, sourceLink);
         modalBody.appendChild(sourceFooter);
     }
 
@@ -807,7 +794,7 @@ async function loadSources() {
             state.linkedinMaxPostsPerKeyword = state.linkedinMaxPostsPerKeyword || 1000;
         }
         renderSourcesGrid();
-        syncCrawlSourceOptions();
+        syncSourceOptions();
         if (elements.sourceCountKicker) {
             elements.sourceCountKicker.textContent = state.sources.length + ' kết nối';
         }
@@ -816,23 +803,31 @@ async function loadSources() {
     }
 }
 
-function syncCrawlSourceOptions() {
-    const selected = elements.crawlSourceSelect.value;
-    elements.crawlSourceSelect.replaceChildren();
-    const allOption = document.createElement('option');
-    allOption.value = '';
-    allOption.textContent = 'Tất cả nguồn đang bật';
-    elements.crawlSourceSelect.appendChild(allOption);
+function populateSourceSelect(select, { enabledOnly = false } = {}) {
+    if (!select) return;
+    const selected = select.value;
+    select.replaceChildren();
+    const allOption = document.createElement("option");
+    allOption.value = "";
+    allOption.textContent = "All";
+    select.appendChild(allOption);
     state.sources.forEach(source => {
-        const option = document.createElement('option');
+        if (enabledOnly && !source.enabled) return;
+        const option = document.createElement("option");
         option.value = source.id;
         option.textContent = source.name;
-        option.disabled = !source.enabled;
-        elements.crawlSourceSelect.appendChild(option);
+        select.appendChild(option);
     });
-    if ([...elements.crawlSourceSelect.options].some(option => option.value === selected && !option.disabled)) {
-        elements.crawlSourceSelect.value = selected;
+    if ([...select.options].some(option => option.value === selected)) {
+        select.value = selected;
     }
+}
+
+function syncSourceOptions() {
+    // Lead history can be filtered by every registered source, including disabled ones.
+    populateSourceSelect(elements.filterSource);
+    // Manual "All" follows backend behavior and runs only enabled sources.
+    populateSourceSelect(elements.crawlSourceSelect, { enabledOnly: true });
 }
 
 async function saveLinkedInPostLimit(input, button, status) {
@@ -846,7 +841,7 @@ async function saveLinkedInPostLimit(input, button, status) {
     state.isSavingLinkedInConfig = true;
     input.disabled = true;
     button.disabled = true;
-    status.textContent = 'Đang lưu vào Google Sheets…';
+    status.textContent = 'Đang lưu…';
     status.dataset.type = '';
     try {
         const response = await fetch('/api/sources/linkedin/config', {
@@ -858,7 +853,7 @@ async function saveLinkedInPostLimit(input, button, status) {
         if (!response.ok) throw new Error(data.detail || 'Không thể lưu giới hạn LinkedIn');
         state.linkedinMaxPostsPerKeyword = data.max_posts_per_keyword;
         input.value = data.max_posts_per_keyword;
-        status.textContent = 'Đã lưu · áp dụng cho crawl tay và lịch hằng ngày.';
+        status.textContent = 'Đã lưu.';
         status.dataset.type = 'success';
         showToast('Đã cập nhật số bài LinkedIn mỗi keyword.', 'success');
     } catch (error) {
@@ -905,12 +900,21 @@ function renderSourcesGrid() {
         const meta = document.createElement('div');
         meta.className = 'source-meta';
         const seedP = document.createElement('p');
-        seedP.textContent = `URL nguồn: ${src.base_url || 'Chưa cấu hình'}`;
+        let sourceHost = 'Chưa cấu hình';
+        if (src.base_url) {
+            try {
+                sourceHost = new URL(src.base_url).hostname.replace(/^www\./, '');
+            } catch (_) {
+                sourceHost = src.base_url;
+            }
+        }
+        seedP.textContent = sourceHost;
+        seedP.title = src.base_url || '';
         seedP.className = 'source-url';
         meta.appendChild(seedP);
 
         const lastP = document.createElement('p');
-        lastP.textContent = 'Cập nhật gần nhất: ' + (src.last_crawl_at ? formatDate(src.last_crawl_at) : 'Chưa chạy');
+        lastP.textContent = src.last_crawl_at ? 'Lần chạy · ' + formatDate(src.last_crawl_at) : 'Chưa có lần chạy';
         lastP.className = 'source-last-run';
         meta.appendChild(lastP);
         if (src.last_error) {
@@ -931,7 +935,7 @@ function renderSourcesGrid() {
             configLabel.htmlFor = 'linkedin-post-limit';
             configLabel.textContent = 'Bài viết / keyword';
             const configHint = document.createElement('span');
-            configHint.textContent = 'Tối đa 1.000 bài cho mỗi từ khóa mỗi lượt chạy';
+            configHint.textContent = '1–1.000 bài mỗi từ khóa';
             configCopy.append(configLabel, configHint);
 
             const configControls = document.createElement('div');
@@ -1003,9 +1007,9 @@ function updateSourcePreview() {
     const name = elements.sourceNameInput.value.trim();
     const url = elements.sourceUrlInput.value.trim();
     const validUrl = isValidSourceUrl(url);
-    elements.sourceUrlPreview.textContent = url
-        ? (validUrl ? 'URL hợp lệ và sẽ được kiểm tra sau khi lưu.' : 'URL cần bắt đầu bằng http:// hoặc https://.')
-        : 'Mỗi lần thêm một URL, hỗ trợ HTTP và HTTPS.';
+    elements.sourceUrlPreview.textContent = url && !validUrl
+        ? 'URL cần bắt đầu bằng http:// hoặc https://.'
+        : '';
     elements.btnSaveSource.disabled = !name || !validUrl || state.isSavingSources;
 }
 
@@ -1032,8 +1036,7 @@ async function saveSources(event) {
     state.isSavingSources = true;
     elements.btnSaveSource.disabled = true;
     elements.btnSaveSource.textContent = 'Đang lưu và kiểm tra...';
-    elements.sourceFormStatus.textContent =
-        'URL đã được gửi lên backend. Quá trình kiểm tra có thể mất vài giây.';
+    elements.sourceFormStatus.textContent = '';
     try {
         const response = await fetch('/api/sources/import', {
             method: 'POST',
@@ -1133,24 +1136,24 @@ function renderKeywordList() {
 async function loadKeywords(refreshFromSheet = false) {
     elements.btnRefreshKeywords.disabled = true;
     elements.keywordSourceLabel.textContent = refreshFromSheet
-        ? 'Đang đồng bộ lại từ Google Sheets...'
-        : 'Đang đọc dữ liệu...';
+        ? 'Đang đồng bộ…'
+        : 'Đang tải…';
     try {
         const endpoint = refreshFromSheet ? '/api/keywords/refresh' : '/api/keywords';
         const res = await fetch(endpoint, { method: refreshFromSheet ? 'POST' : 'GET' });
         const data = await res.json();
-        if (!res.ok) throw new Error(data.detail || 'Không thể tải keyword');
+        if (!res.ok) throw new Error(data.detail || 'Không thể tải từ khóa');
         state.keywords = Array.isArray(data.items) ? data.items : [];
         elements.keywordSourceLabel.textContent =
-            (data.total || 0) + ' keyword · ' + (data.discovery_total || 0) + ' dùng cho search';
+            (data.total || 0) + ' từ khóa · ' + (data.discovery_total || 0) + ' tìm kiếm trực tiếp';
         renderKeywordList();
-        if (refreshFromSheet) showToast('Đã đồng bộ keyword từ Google Sheets.', 'success');
+        if (refreshFromSheet) showToast('Đã đồng bộ từ khóa.', 'success');
     } catch (error) {
-        elements.keywordSourceLabel.textContent = 'Không thể kết nối Google Sheets';
+        elements.keywordSourceLabel.textContent = 'Không thể tải từ khóa';
         elements.keywordList.replaceChildren();
         const stateNode = document.createElement('div');
         stateNode.className = 'keyword-list-state error';
-        stateNode.textContent = error.message + '. Kiểm tra worksheet Keywords rồi thử đồng bộ lại.';
+        stateNode.textContent = error.message;
         elements.keywordList.appendChild(stateNode);
     } finally {
         elements.btnRefreshKeywords.disabled = false;
@@ -1181,7 +1184,7 @@ async function handleKeywordFile(event) {
     }
     if (file.size > 1024 * 1024) {
         elements.keywordFileName.textContent = 'File vượt quá 1 MB';
-        showToast('File keyword phải nhỏ hơn hoặc bằng 1 MB.', 'error');
+        showToast('File từ khóa phải nhỏ hơn hoặc bằng 1 MB.', 'error');
         event.target.value = '';
         return;
     }
@@ -1210,7 +1213,7 @@ async function saveKeywords(event) {
     state.isSavingKeywords = true;
     elements.btnSaveKeywords.disabled = true;
     elements.btnSaveKeywords.textContent = 'Đang lưu...';
-    elements.keywordFormStatus.textContent = 'Đang cập nhật worksheet Keywords.';
+    elements.keywordFormStatus.textContent = 'Đang lưu…';
     try {
         const res = await fetch('/api/keywords/import', {
             method: 'POST',
@@ -1229,8 +1232,8 @@ async function saveKeywords(event) {
         elements.keywordFormStatus.textContent = '';
         showToast(
             changed > 0
-                ? 'Đã cập nhật ' + changed + ' keyword; bỏ qua ' + (data.duplicates || 0) + ' mục trùng.'
-                : 'Không có thay đổi; ' + (data.duplicates || 0) + ' keyword đã tồn tại.',
+                ? 'Đã cập nhật ' + changed + ' từ khóa; bỏ qua ' + (data.duplicates || 0) + ' mục trùng.'
+                : 'Không có thay đổi; ' + (data.duplicates || 0) + ' từ khóa đã tồn tại.',
             changed > 0 ? 'success' : 'info'
         );
         updateKeywordPreview();
@@ -1240,7 +1243,7 @@ async function saveKeywords(event) {
             error.message + '. Nội dung nhập vẫn được giữ để bạn thử lại.';
     } finally {
         state.isSavingKeywords = false;
-        elements.btnSaveKeywords.textContent = 'Thêm vào Google Sheets';
+        elements.btnSaveKeywords.textContent = 'Thêm từ khóa';
         updateKeywordPreview();
     }
 }
@@ -1256,7 +1259,7 @@ async function executeCrawl() {
     elements.btnStartCrawl.disabled = true;
     elements.btnCancelCrawl.disabled = true;
     elements.crawlProgressBox.classList.remove('hidden');
-    elements.crawlProgressText.textContent = `Đang thu thập từ ${sourceId || 'các nguồn đang bật'} · ${timeframe}...`;
+    elements.crawlProgressText.textContent = `Đang thu thập từ ${sourceId || 'All'} · ${timeframe}...`;
 
     try {
         const payload = {
@@ -1472,7 +1475,7 @@ function initEvents() {
             if (!response.ok) throw new Error(data.detail || 'Không thể đồng bộ Sources');
             await loadSources();
             await loadSchedulerStatus();
-            showToast('Đã đồng bộ nguồn từ Google Sheets.', 'success');
+            showToast('Đã đồng bộ danh sách nguồn.', 'success');
         } catch (error) {
             showToast(error.message + '. Dữ liệu đang hiển thị vẫn được giữ nguyên.', 'error');
         } finally {

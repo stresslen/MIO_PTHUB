@@ -134,3 +134,39 @@ def test_ai_401_is_classified_as_authentication_error(monkeypatch):
     monkeypatch.setattr(ai_extractor, "_extract_gemini", reject)
     with pytest.raises(AIAuthenticationError):
         ai_extractor.extract("Tin AI", "Nội dung", raise_on_api_error=True)
+
+
+async def test_frontend_priority_pauses_background_and_uses_reserved_executor():
+    import asyncio
+    import threading
+
+    from app.services.priority_service import PriorityCoordinator
+
+    coordinator = PriorityCoordinator()
+    release_background = asyncio.Event()
+
+    async def run_background():
+        await release_background.wait()
+        return await coordinator.run_blocking(
+            lambda: "background", worker_name="test background"
+        )
+
+    background_task = asyncio.create_task(run_background())
+    try:
+        async with coordinator.fe_priority_context("test frontend"):
+            release_background.set()
+            await asyncio.sleep(0.02)
+            assert coordinator.is_fe_active is True
+            assert coordinator.is_current_task_frontend is True
+            assert background_task.done() is False
+
+            thread_name = await coordinator.run_blocking(
+                lambda: threading.current_thread().name,
+                worker_name="test frontend",
+            )
+            assert thread_name.startswith("mio-fe-priority")
+
+        assert coordinator.is_fe_active is False
+        assert await asyncio.wait_for(background_task, timeout=1) == "background"
+    finally:
+        coordinator._frontend_executor.shutdown(wait=True)

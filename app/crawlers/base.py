@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 
 from app.config import RAW_DATA_DIR, settings
 from app.services.keyword_service import keyword_service
+from app.services.priority_service import priority_coordinator
 from app.pipeline.normalize import canonicalize_url, clean_html, normalize_unicode, parse_datetime, utc_now
 
 urllib3.disable_warnings()
@@ -299,7 +300,6 @@ class SourceAdapter(ABC):
         url = canonicalize_url(url)
         await asyncio.sleep(self.rate_limit_delay)
 
-        loop = asyncio.get_event_loop()
         session = self._get_session()
         last_error: Optional[Exception] = None
 
@@ -310,7 +310,9 @@ class SourceAdapter(ABC):
                     resp.encoding = resp.apparent_encoding or "utf-8"
                     return resp.text, resp.status_code, dict(resp.headers)
 
-                html_text, status_code, resp_headers = await loop.run_in_executor(None, _do_get)
+                html_text, status_code, resp_headers = await priority_coordinator.run_blocking(
+                    _do_get, worker_name=f"HTTP fetch {self.source_id}"
+                )
                 
                 if status_code in (200, 201, 202):
                     clean_txt = clean_html(html_text)

@@ -130,12 +130,19 @@ def test_frontend_uses_separate_editors_and_cache_busted_javascript():
     assert 'id="sales-prompt-modal"' in html
     assert 'id="btn-open-scoring-prompt"' in html
     assert 'id="btn-open-sales-prompt"' in html
-    assert "/static/js/app.js?v=2.6.0" in html
+    assert "/static/js/app.js?v=2.8.0" in html
     assert "/api/scoring/prompts/" in javascript
     assert "Cơ sở chấm điểm" not in javascript
     assert "Kịch bản tiếp cận đề xuất" in javascript
     assert "createDetailItem('Email', contactEmail)" in javascript
     assert "createDetailItem('Số điện thoại', contactPhone)" in javascript
     assert "Xem nguồn gốc" in javascript
-    assert "sourceFooter.append(sourceCopy, sourceLink)" in javascript
+    assert "sourceFooter.append(sourceTitle, sourceLink)" in javascript
+    assert "Lưu riêng tại gemini_sales_prompt" not in html
+    assert "URL được lưu trước khi hệ thống kiểm tra kết nối" not in html
+    assert "Đặt tên dễ nhận biết cho nguồn" not in html
+    assert "sourceHost = new URL(src.base_url).hostname" in javascript
     assert "/api/sources/linkedin/config" in javascript
+    assert '<option value="">All</option>' in html
+    assert "populateSourceSelect(elements.filterSource)" in javascript
+    assert "if (state.sources.length === 0) loadSources()" in javascript
