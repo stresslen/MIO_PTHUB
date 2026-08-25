@@ -20,7 +20,6 @@ from app.config import get_sources_config, settings
 urllib3.disable_warnings()
 logger = logging.getLogger(__name__)
 
-MAX_URLS_PER_IMPORT = 10
 CUSTOM_MAX_PAGES = 200
 CUSTOM_MAX_DEPTH = 3
 ERROR_NOTICE = "Nguồn này chưa crawl được, cần cập nhật adapter sau."
@@ -53,28 +52,6 @@ def normalize_source_url(raw: str) -> str:
     if path != "/":
         path = path.rstrip("/")
     return urlunparse((parsed.scheme.lower(), host + port, path, "", parsed.query, ""))
-
-
-def parse_url_input(content: str) -> list[str]:
-    if not isinstance(content, str) or not content.strip():
-        raise ValueError("Danh sách URL đang trống")
-    candidates = re.split(r"[\r\n]+", content)
-    values: list[str] = []
-    seen: set[str] = set()
-    for raw in candidates:
-        url = normalize_source_url(raw)
-        if not url:
-            continue
-        key = url.casefold()
-        if key in seen:
-            continue
-        seen.add(key)
-        values.append(url)
-    if not values:
-        raise ValueError("Không tìm thấy URL hợp lệ")
-    if len(values) > MAX_URLS_PER_IMPORT:
-        raise ValueError(f"Mỗi lần chỉ được thêm tối đa {MAX_URLS_PER_IMPORT} URL")
-    return values
 
 
 def validate_public_url(url: str, resolve_dns: bool = True) -> tuple[bool, str | None]:
@@ -274,58 +251,71 @@ class SourceService:
             self._source = "google_sheets"
             self._last_synced_at = _now()
 
-    def add_urls(self, content: str, include_in_schedule: bool = False) -> dict[str, Any]:
+    def add_url(self, name: str, url: str, include_in_schedule: bool = False) -> dict[str, Any]:
+        """Persist exactly one user-named website source before probing it."""
         if not self.sheets.configured:
             raise RuntimeError("Google Sheets chưa được cấu hình để lưu nguồn")
-        urls = parse_url_input(content)
+        display_name = re.sub(r"\s+", " ", str(name or "")).strip()
+        if not display_name:
+            raise ValueError("Tên trang đang trống")
+        if len(display_name) > 120:
+            raise ValueError("Tên trang không được vượt quá 120 ký tự")
+        raw_url = str(url or "").strip()
+        if not raw_url:
+            raise ValueError("URL đang trống")
+        if "\n" in raw_url or "\r" in raw_url:
+            raise ValueError("Mỗi lần chỉ được thêm một URL")
+        normalized_url = normalize_source_url(raw_url)
+        if not normalized_url:
+            raise ValueError("URL không hợp lệ")
+
         existing_urls = {
-            url.casefold()
+            existing.casefold()
             for row in self.snapshot()["items"]
-            for url in row["seed_urls"]
+            for existing in row["seed_urls"]
         }
-        now = _now()
-        added = duplicates = failed = 0
-        items: list[dict[str, Any]] = []
-        for url in urls:
-            if url.casefold() in existing_urls:
-                duplicates += 1
-                continue
-            parsed = urlparse(url)
-            host = (parsed.hostname or "website").lower()
-            suffix = hashlib.sha256(url.encode("utf-8")).hexdigest()[:8]
-            slug = re.sub(r"[^a-z0-9]+", "-", host).strip("-")[:32] or "website"
-            valid, validation_error = validate_public_url(url)
-            item = {
-                "id": f"custom-{slug}-{suffix}",
-                "name": host,
-                "description": "Nguồn website do người dùng thêm",
-                "seed_urls": [url],
-                "adapter_mode": "generic",
-                "adapter_key": "generic",
-                "crawl_scope": "full_site",
-                "rate_limit_delay": 1.0,
-                "timeout": min(int(settings.crawl_timeout_seconds), 30),
-                "enabled": valid,
-                "include_in_schedule": bool(include_in_schedule and valid),
-                "status": "NEW" if valid else "NEEDS_ADAPTER",
-                "last_error": "" if valid else ERROR_NOTICE,
-                "last_attempt_at": now,
-                "last_success_at": "",
-                "created_at": now,
-                "updated_at": now,
+        if normalized_url.casefold() in existing_urls:
+            return {
+                "added": 0,
+                "duplicates": 1,
+                "needs_update": 0,
+                "items": [],
+                "total": self.snapshot()["total"],
             }
-            self._store(item)
-            existing_urls.add(url.casefold())
-            if not valid:
-                logger.warning("Custom source validation failed for %s: %s", url, validation_error)
-                failed += 1
-            added += 1
-            items.append(dict(item))
+
+        parsed = urlparse(normalized_url)
+        host = (parsed.hostname or "website").lower()
+        suffix = hashlib.sha256(normalized_url.encode("utf-8")).hexdigest()[:8]
+        slug = re.sub(r"[^a-z0-9]+", "-", host).strip("-")[:32] or "website"
+        valid, validation_error = validate_public_url(normalized_url)
+        now = _now()
+        item = {
+            "id": f"custom-{slug}-{suffix}",
+            "name": display_name,
+            "description": "Nguồn website do người dùng thêm",
+            "seed_urls": [normalized_url],
+            "adapter_mode": "generic",
+            "adapter_key": "generic",
+            "crawl_scope": "full_site",
+            "rate_limit_delay": 1.0,
+            "timeout": min(int(settings.crawl_timeout_seconds), 30),
+            "enabled": valid,
+            "include_in_schedule": bool(include_in_schedule and valid),
+            "status": "NEW" if valid else "NEEDS_ADAPTER",
+            "last_error": "" if valid else ERROR_NOTICE,
+            "last_attempt_at": now,
+            "last_success_at": "",
+            "created_at": now,
+            "updated_at": now,
+        }
+        self._store(item)
+        if not valid:
+            logger.warning("Custom source validation failed for %s: %s", normalized_url, validation_error)
         return {
-            "added": added,
-            "duplicates": duplicates,
-            "needs_update": failed,
-            "items": items,
+            "added": 1,
+            "duplicates": 0,
+            "needs_update": 0 if valid else 1,
+            "items": [dict(item)],
             "total": self.snapshot()["total"],
         }
 

@@ -25,7 +25,6 @@ class SchedulerService:
         self.hour = settings.scheduler_hour
         self.minute = settings.scheduler_minute
         self.timeframe = "1_day"
-        self.max_items: Optional[int] = None
         self.is_running = False
         self.current_task: Optional[asyncio.Task] = None
         self.last_run_at: Optional[datetime.datetime] = None
@@ -57,7 +56,6 @@ class SchedulerService:
         self.timezone = "Asia/Ho_Chi_Minh"
         self.cadence = "daily"
         self.timeframe = "1_day"
-        self.max_items = None
 
     def configure(self, config: dict[str, Any]) -> dict[str, Any]:
         was_running = self.is_running
@@ -107,7 +105,7 @@ class SchedulerService:
                     await asyncio.sleep(chunk)
                     sleep_seconds -= chunk
                 if self.is_running and self.enabled:
-                    await self._execute_run(self.timeframe, self.max_items)
+                    await self._execute_run(self.timeframe)
             except asyncio.CancelledError:
                 break
             except Exception as exc:
@@ -117,14 +115,12 @@ class SchedulerService:
     async def _execute_run(
         self,
         timeframe: str,
-        max_items: Optional[int],
         success_status: str = "SUCCESS",
         manual: bool = False,
     ) -> Dict[str, Any]:
         self.last_run_summary["status"] = "RUNNING"
         runs = await crawler_service.run_all_sources(
             force_recrawl=False,
-            max_items=max_items,
             timeframe=timeframe,
             is_manual_fe=manual,
         )
@@ -142,8 +138,8 @@ class SchedulerService:
         }
         return self.last_run_summary
 
-    async def trigger_immediate_run(self, timeframe: str = "1_month", max_items: Optional[int] = None) -> Dict[str, Any]:
-        return await self._execute_run(timeframe, max_items, manual=True)
+    async def trigger_immediate_run(self, timeframe: str = "1_month") -> Dict[str, Any]:
+        return await self._execute_run(timeframe, manual=True)
 
     def toggle(self, enabled: Optional[bool] = None) -> bool:
         new_enabled = (not self.enabled) if enabled is None else enabled

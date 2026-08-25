@@ -83,12 +83,12 @@ class SourceInfo(BaseModel):
 
 
 class SourceImportRequest(BaseModel):
-    content: str = Field(min_length=1, max_length=10000)
+    name: str = Field(min_length=1, max_length=120)
+    url: str = Field(min_length=1, max_length=2048)
     include_in_schedule: bool = False
 
 
 class TriggerCrawlRequest(BaseModel):
     source_id: Optional[str] = None  # None means run all enabled sources
     force_recrawl: bool = False
-    max_items: int = Field(default=20, ge=1, le=100)
     timeframe: Literal["1_day", "1_week", "1_month"] = "1_week"

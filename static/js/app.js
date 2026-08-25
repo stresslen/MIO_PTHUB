@@ -64,6 +64,7 @@ const elements = {
     btnCloseSourceModal: document.getElementById('btn-close-source-modal'),
     btnCancelSource: document.getElementById('btn-cancel-source'),
     btnSaveSource: document.getElementById('btn-save-source'),
+    sourceNameInput: document.getElementById('source-name-input'),
     sourceUrlInput: document.getElementById('source-url-input'),
     sourceIncludeSchedule: document.getElementById('source-include-schedule'),
     sourceUrlPreview: document.getElementById('source-url-preview'),
@@ -696,35 +697,29 @@ function renderSourcesGrid() {
 // ==========================================
 // Google Sheets Source Registry
 // ==========================================
-function parseSourcePreview(content) {
-    const seen = new Set();
-    return String(content || '')
-        .split(/[\r\n]+/)
-        .map(value => value.trim())
-        .filter(value => {
-            if (!value) return false;
-            const key = value.toLocaleLowerCase('vi-VN');
-            if (seen.has(key)) return false;
-            seen.add(key);
-            return true;
-        });
+function isValidSourceUrl(value) {
+    try {
+        const parsed = new URL(String(value || '').trim());
+        return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+    } catch (_) {
+        return false;
+    }
 }
 
 function updateSourcePreview() {
-    const urls = parseSourcePreview(elements.sourceUrlInput.value);
-    elements.sourceUrlPreview.textContent = urls.length
-        ? urls.length + ' URL sẽ được lưu và kiểm tra'
-        : 'Tối đa 10 URL mỗi lần';
-    elements.btnSaveSource.disabled =
-        urls.length === 0 || urls.length > 10 || state.isSavingSources;
-    elements.sourceFormStatus.textContent =
-        urls.length > 10 ? 'Mỗi lần chỉ được thêm tối đa 10 URL.' : '';
+    const name = elements.sourceNameInput.value.trim();
+    const url = elements.sourceUrlInput.value.trim();
+    const validUrl = isValidSourceUrl(url);
+    elements.sourceUrlPreview.textContent = url
+        ? (validUrl ? 'URL hợp lệ và sẽ được kiểm tra sau khi lưu.' : 'URL cần bắt đầu bằng http:// hoặc https://.')
+        : 'Mỗi lần thêm một URL, hỗ trợ HTTP và HTTPS.';
+    elements.btnSaveSource.disabled = !name || !validUrl || state.isSavingSources;
 }
 
 function openSourceModal() {
     elements.sourceModal.classList.remove('hidden');
     elements.sourceFormStatus.textContent = '';
-    window.setTimeout(() => elements.sourceUrlInput.focus(), 60);
+    window.setTimeout(() => elements.sourceNameInput.focus(), 60);
 }
 
 function closeSourceModal() {
@@ -734,8 +729,12 @@ function closeSourceModal() {
 
 async function saveSources(event) {
     event.preventDefault();
-    const urls = parseSourcePreview(elements.sourceUrlInput.value);
-    if (urls.length === 0 || urls.length > 10 || state.isSavingSources) return;
+    const name = elements.sourceNameInput.value.trim();
+    const url = elements.sourceUrlInput.value.trim();
+    if (!name || !isValidSourceUrl(url) || state.isSavingSources) {
+        elements.sourceForm.reportValidity();
+        return;
+    }
 
     state.isSavingSources = true;
     elements.btnSaveSource.disabled = true;
@@ -747,7 +746,8 @@ async function saveSources(event) {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                content: elements.sourceUrlInput.value,
+                name: name,
+                url: url,
                 include_in_schedule: elements.sourceIncludeSchedule.checked
             })
         });
@@ -755,6 +755,7 @@ async function saveSources(event) {
         if (!response.ok) throw new Error(data.detail || 'Không thể lưu URL');
 
         const needsUpdate = data.needs_update || 0;
+        elements.sourceNameInput.value = '';
         elements.sourceUrlInput.value = '';
         elements.sourceIncludeSchedule.checked = false;
         updateSourcePreview();
@@ -766,9 +767,9 @@ async function saveSources(event) {
                 'info'
             );
         } else if ((data.added || 0) > 0) {
-            showToast('Đã lưu và kiểm tra ' + data.added + ' nguồn mới.', 'success');
+            showToast('Đã lưu và kiểm tra nguồn “' + name + '”.', 'success');
         } else {
-            showToast('Các URL này đã tồn tại trong danh sách nguồn.', 'info');
+            showToast('URL này đã tồn tại trong danh sách nguồn.', 'info');
         }
     } catch (error) {
         elements.sourceFormStatus.textContent =
@@ -957,7 +958,6 @@ async function saveKeywords(event) {
 async function executeCrawl() {
     const sourceId = elements.crawlSourceSelect.value || null;
     const timeframe = elements.crawlTimeframeSelect ? elements.crawlTimeframeSelect.value : '1_week';
-    const maxItems = 20;
     const force = false;
 
     elements.btnStartCrawl.disabled = true;
@@ -969,7 +969,6 @@ async function executeCrawl() {
         const payload = {
             source_id: sourceId,
             timeframe: timeframe,
-            max_items: maxItems,
             force_recrawl: force
         };
 
@@ -1105,7 +1104,14 @@ function initEvents() {
     if (elements.btnCloseSourceModal) elements.btnCloseSourceModal.addEventListener('click', closeSourceModal);
     if (elements.btnCancelSource) elements.btnCancelSource.addEventListener('click', closeSourceModal);
     if (elements.sourceForm) elements.sourceForm.addEventListener('submit', saveSources);
-    if (elements.sourceUrlInput) elements.sourceUrlInput.addEventListener('input', updateSourcePreview);
+    if (elements.sourceNameInput) elements.sourceNameInput.addEventListener('input', () => {
+        elements.sourceFormStatus.textContent = '';
+        updateSourcePreview();
+    });
+    if (elements.sourceUrlInput) elements.sourceUrlInput.addEventListener('input', () => {
+        elements.sourceFormStatus.textContent = '';
+        updateSourcePreview();
+    });
     if (elements.sourceModal) {
         elements.sourceModal.addEventListener('click', event => {
             if (event.target === elements.sourceModal) closeSourceModal();

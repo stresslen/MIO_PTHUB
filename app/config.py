@@ -58,9 +58,9 @@ class Settings(BaseSettings):
     xah_language: str = "Vietnam"
     xah_timeout_seconds: int = 60
 
-    # Round-two organization enrichment. XAH is an explicit part of this mode:
-    # it discovers/verifies an official site and fills material gaps left after
-    # crawling that verified site. It is never used to invent missing values.
+    # Round-two organization enrichment: crawl a verified round-one URL when
+    # available; otherwise Gemini creates keywords and XAH returns sourced web
+    # content directly. XAH also fills evidence gaps after a direct crawl.
     company_enrichment_enabled: bool = True
     company_enrichment_mode: str = "xah"
     company_profile_max_pages: int = 60

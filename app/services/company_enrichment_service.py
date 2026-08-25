@@ -161,7 +161,12 @@ Trả duy nhất JSON: {{"queries":["2 đến 3 truy vấn tiếng Việt có t�
                         continue
                     seen.add(url)
                     clean = dict(item)
-                    clean.update(url=url, query=query)
+                    clean.update(
+                        url=url,
+                        query=query,
+                        xah_answer=payload.get("answer") or "",
+                        xah_provider=payload.get("provider") or "xah",
+                    )
                     results.append(clean)
             except Exception as exc:
                 errors.append(f"{query}: {exc}")
@@ -190,34 +195,119 @@ Tiêu đề: {item.get("title") or ""}
 Nội dung backend tải: {page.get("text", "(không tải được)")[:6000]}''')
         return "\n\n".join(blocks)
 
-    def _discover_official_url(self, name: str, tax_code: str | None, location: str | None):
+    @staticmethod
+    def _xah_context(results: list[dict[str, Any]]) -> str:
+        # Evidence context comes only from content returned directly by XAH Search.
+        query_blocks: list[str] = []
+        seen_queries: set[str] = set()
+        for item in results:
+            query = str(item.get("query") or "").strip()
+            if query and query not in seen_queries:
+                seen_queries.add(query)
+                query_blocks.append(
+                    f"TRUY VẤN XAH: {query}\n"
+                    f"TÓM TẮT XAH: {item.get('xah_answer') or '(không có tóm tắt)'}"
+                )
+        result_blocks = []
+        for index, item in enumerate(results, 1):
+            result_blocks.append(f'''[KẾT QUẢ XAH {index}]
+URL: {item["url"]}
+Tiêu đề: {item.get("title") or ""}
+Đoạn nội dung XAH thu thập: {item.get("snippet") or "(không có đoạn trích)"}
+Ngày đăng: {item.get("published_at") or "không có"}''')
+        return "\n\n".join([*query_blocks, *result_blocks])
+
+    def _enrich_from_xah(
+        self,
+        name: str,
+        organization_type: str | None,
+        tax_code: str | None,
+        location: str | None,
+        notes: list[str],
+    ) -> CompanyEnrichmentResult:
+        # No round-one URL: let XAH search/crawl by Gemini-generated keywords.
         if settings.company_enrichment_mode != "xah":
-            return None, 0.0, "WEBSITE_NOT_FOUND", [], False
+            return CompanyEnrichmentResult(
+                status="WEBSITE_NOT_FOUND",
+                message="Gemini vòng 1 không cung cấp URL và chế độ XAH đang tắt",
+                missing_information=["official_url"],
+            )
         if not settings.xah_api_key:
-            return None, 0.0, "DISCOVERY_FAILED", ["Chưa cấu hình XAH_API_KEY"], False
-        queries = self._make_queries(name, tax_code, location, ["website chính thức", "địa chỉ", "mã số thuế"])
-        results, search_errors = self._search_queries(queries)
+            return CompanyEnrichmentResult(
+                status="DISCOVERY_FAILED",
+                message="Chưa cấu hình XAH_API_KEY",
+                missing_information=["official_url"],
+            )
+
+        targets = [
+            "official_url", "industry", "size", "locations", "revenue",
+            "employee_count", "technologies", "projects", "news", "jobs",
+            "tenders", "contacts", "decision_makers",
+        ]
+        try:
+            queries = self._make_queries(name, tax_code, location, targets)
+            results, search_errors = self._search_queries(queries)
+        except Exception as exc:
+            return CompanyEnrichmentResult(
+                status="DISCOVERY_FAILED",
+                message=str(exc),
+                missing_information=targets,
+                xah_used=False,
+            )
         if not results:
-            return None, 0.0, "DISCOVERY_FAILED", search_errors or ["XAH không trả URL ứng viên"], True
-        pages, fetch_errors = self._load_search_urls(results)
-        data = ai_extractor._call_gemini_json(f'''Bạn xác minh website chính thức từ URL thật do backend cung cấp.
-Tổ chức: {name}
-Mã số thuế: {tax_code or "không có"}
-Địa điểm: {location or "không có"}
-{self._candidate_context(results, pages)}
-Quy tắc: không tạo URL mới; chỉ VERIFIED khi tên pháp lý và ít nhất một tín hiệu địa chỉ, mã số thuế, email domain hoặc trang giới thiệu khớp. official_url phải cùng domain một URL trên.
-Trả duy nhất JSON: {{"status":"VERIFIED|WEBSITE_AMBIGUOUS|WEBSITE_NOT_FOUND","official_url":null,"confidence":0.0,"matched_evidence":[],"message":"..."}}''')
-        status = str(data.get("status") or "WEBSITE_AMBIGUOUS").upper()
-        official = canonicalize_url(str(data.get("official_url") or ""))
-        candidate_hosts = {(urlparse(item["url"]).hostname or "").lower().removeprefix("www.") for item in results}
-        official_host = (urlparse(official).hostname or "").lower().removeprefix("www.")
-        if status != "VERIFIED" or not official or official_host not in candidate_hosts:
-            safe_status = status if status in {"WEBSITE_AMBIGUOUS", "WEBSITE_NOT_FOUND"} else "WEBSITE_AMBIGUOUS"
-            return None, 0.0, safe_status, fetch_errors, True
-        valid, reason = validate_public_url(official, resolve_dns=True)
-        if not valid:
-            return None, 0.0, "WEBSITE_AMBIGUOUS", [reason or "URL không an toàn"], True
-        return self._root_url(official), float(data.get("confidence") or 0.0), "VERIFIED", fetch_errors, True
+            messages = self._dedupe([*notes, *search_errors, "XAH không trả dữ liệu có URL nguồn"])
+            return CompanyEnrichmentResult(
+                status="DISCOVERY_FAILED",
+                message="; ".join(messages),
+                missing_information=targets,
+                xah_used=True,
+            )
+
+        source_urls = self._dedupe([item["url"] for item in results])
+        try:
+            data = ai_extractor._call_gemini_json(self._profile_prompt(
+                name,
+                organization_type,
+                tax_code,
+                "",
+                "",
+                self._xah_context(results),
+            ))
+        except Exception as exc:
+            messages = self._dedupe([*notes, *search_errors, str(exc)])
+            return CompanyEnrichmentResult(
+                status="AI_EXTRACTION_FAILED",
+                message="; ".join(messages),
+                missing_information=targets,
+                source_urls=source_urls,
+                xah_used=True,
+            )
+
+        profile, contacts, evidence, missing = self._normalize_profile(
+            data, name, "", source_urls
+        )
+        profile.update(
+            organization_type=organization_type,
+            verification_confidence=0.0,
+        )
+        status = "COMPLETE" if not missing else "PROFILE_INCOMPLETE"
+        messages = self._dedupe([*notes, *search_errors])
+        logger.info(
+            "[company_enrichment] Hoàn tất %s bằng XAH trực tiếp với trạng thái %s",
+            name,
+            status,
+        )
+        return CompanyEnrichmentResult(
+            status=status,
+            message="; ".join(messages) or None,
+            organization=profile,
+            contacts=contacts,
+            evidence=evidence,
+            missing_information=missing,
+            source_urls=source_urls,
+            xah_used=True,
+        )
+
 
     async def _crawl_official_site(self, official_url: str) -> tuple[str, list[str], list[str]]:
         adapter = GenericWebsiteAdapter({
@@ -271,23 +361,24 @@ Trả duy nhất JSON: {{"status":"VERIFIED|WEBSITE_AMBIGUOUS|WEBSITE_NOT_FOUND"
     @staticmethod
     def _profile_prompt(name: str, org_type: str | None, tax_code: str | None, official_url: str,
                         website_context: str, supplemental_context: str = "") -> str:
-        supplemental = f"\nDỮ LIỆU URL XAH ĐÃ ĐƯỢC BACKEND TẢI:\n{supplemental_context}" if supplemental_context else ""
+        supplemental = f"\nKẾT QUẢ XAH SEARCH CÓ URL NGUỒN:\n{supplemental_context}" if supplemental_context else ""
         return f'''Bạn trích xuất Company Profile có kiểm chứng, chỉ dùng nội dung và URL trong prompt.
 Tổ chức vòng 1: {name}
 Loại tổ chức: {org_type or "chưa rõ"}
 Mã số thuế vòng 1: {tax_code or "chưa có"}
-Website đã xác minh: {official_url}
+Website từ vòng 1: {official_url or "không có"}
 DỮ LIỆU CRAWL WEBSITE CHÍNH THỨC:
-{website_context}
+{website_context or "(không chạy vì vòng 1 không có URL)"}
 {supplemental}
 Quy tắc tuyệt đối:
 - Không tạo tên người, chức danh, email, điện thoại, doanh thu, công nghệ hay dự án.
 - Không suy diễn email theo mẫu. Không có bằng chứng thì null hoặc [].
 - Mỗi contact và dữ liệu quan trọng phải có source_url thật xuất hiện trong prompt và evidence_text trực tiếp.
+- official_url chỉ được lấy từ một URL xuất hiện nguyên văn trong prompt; không có bằng chứng thì null.
 - Chỉ xếp hạng người thực sự tìm thấy. role_group: economic_buyer, technical_buyer, process_buyer, champion hoặc other.
 - Không trích xuất lịch sử tương tác nội bộ từ website.
 Trả duy nhất JSON:
-{{"legal_name":"tên có bằng chứng","aliases":[],"tax_code":null,"industry":null,"size":null,"locations":[],"revenue":null,"employee_count":null,"technologies":[],"projects":[{{"name":"...","summary":"...","source_url":"..."}}],"news":[{{"title":"...","published_at":null,"source_url":"..."}}],"jobs":[{{"title":"...","source_url":"..."}}],"tenders":[{{"title":"...","source_url":"..."}}],"contacts":[{{"full_name":null,"raw_title":null,"role_group":"other","email":null,"phone":null,"profile_url":null,"source_url":"...","evidence_text":"...","decision_score":null,"decision_reason":null}}],"evidence":[{{"field":"industry","value":"...","source_url":"...","evidence_text":"...","confidence":0.0}}],"missing_information":[],"search_queries":[]}}'''
+{{"legal_name":"tên có bằng chứng","aliases":[],"official_url":null,"tax_code":null,"industry":null,"size":null,"locations":[],"revenue":null,"employee_count":null,"technologies":[],"projects":[{{"name":"...","summary":"...","source_url":"..."}}],"news":[{{"title":"...","published_at":null,"source_url":"..."}}],"jobs":[{{"title":"...","source_url":"..."}}],"tenders":[{{"title":"...","source_url":"..."}}],"contacts":[{{"full_name":null,"raw_title":null,"role_group":"other","email":null,"phone":null,"profile_url":null,"source_url":"...","evidence_text":"...","decision_score":null,"decision_reason":null}}],"evidence":[{{"field":"industry","value":"...","source_url":"...","evidence_text":"...","confidence":0.0}}],"missing_information":[],"search_queries":[]}}'''
 
     @staticmethod
     def _source_allowed(url: str, allowed_urls: set[str]) -> bool:
@@ -297,9 +388,14 @@ Trả duy nhất JSON:
     def _normalize_profile(self, data: dict[str, Any], name: str, official_url: str,
                            allowed_urls: list[str]):
         allowed = {canonicalize_url(v) for v in allowed_urls if v}
+        resolved_official_url = canonicalize_url(official_url)
+        if not resolved_official_url:
+            proposed_url = canonicalize_url(str(data.get("official_url") or ""))
+            if proposed_url in allowed:
+                resolved_official_url = proposed_url
         profile = {
             "legal_name": normalize_unicode(str(data.get("legal_name") or name))[:300],
-            "aliases": self._dedupe(data.get("aliases") or []), "official_url": official_url,
+            "aliases": self._dedupe(data.get("aliases") or []), "official_url": resolved_official_url,
             "tax_code": normalize_unicode(str(data.get("tax_code") or "")) or None,
             "industry": normalize_unicode(str(data.get("industry") or "")) or None,
             "size": normalize_unicode(str(data.get("size") or "")) or None,
@@ -370,7 +466,7 @@ Trả duy nhất JSON:
                 message="Không đủ bằng chứng xác định tổ chức ở vòng 1", missing_information=["organization_name"])
         logger.info("[company_enrichment] Bắt đầu vòng 2 cho tổ chức: %s", name)
         official_url = canonicalize_url(str(organization_website or ""))
-        confidence, discovery_status, notes, xah_used = 0.0, "VERIFIED", [], False
+        confidence, notes, xah_used = 0.0, [], False
         if official_url:
             valid, reason = validate_public_url(official_url, resolve_dns=True)
             if valid:
@@ -378,18 +474,17 @@ Trả duy nhất JSON:
             else:
                 official_url, notes = "", [reason or "Website trong nguồn không an toàn"]
         if not official_url:
-            try:
-                official_url, confidence, discovery_status, extra, used = self._discover_official_url(name, organization_tax_code, location)
-                notes.extend(extra)
-                xah_used = xah_used or used
-            except Exception as exc:
-                return CompanyEnrichmentResult(status="DISCOVERY_FAILED", message=str(exc),
-                    missing_information=["official_url"], xah_used=xah_used)
-        if not official_url:
-            logger.warning("[company_enrichment] Không xác minh được website cho %s: %s", name, discovery_status)
-            return CompanyEnrichmentResult(status=discovery_status,
-                message="; ".join(notes) or "Không xác minh được website chính thức",
-                missing_information=["official_url"], xah_used=xah_used)
+            logger.info(
+                "[company_enrichment] Gemini vòng 1 không cung cấp URL; chuyển keyword sang XAH cho %s",
+                name,
+            )
+            return self._enrich_from_xah(
+                name,
+                organization_type,
+                organization_tax_code,
+                location,
+                notes,
+            )
 
         logger.info("[company_enrichment] Website chính thức đã xác minh: %s (confidence=%.2f)", official_url, confidence)
         crawl_error, website_context, crawled_urls = None, "", []

@@ -57,8 +57,9 @@ def get_sources(db: Session = Depends(get_db)):
 async def import_sources(payload: SourceImportRequest):
     try:
         result = await asyncio.to_thread(
-            source_service.add_urls,
-            payload.content,
+            source_service.add_url,
+            payload.name,
+            payload.url,
             payload.include_in_schedule,
         )
         updated = []

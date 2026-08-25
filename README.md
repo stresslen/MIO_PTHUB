@@ -96,7 +96,7 @@ Tách biệt hoàn toàn trong `configs/scoring.yaml`, Sales có thể chỉnh t
 pip install -r requirements.txt
 
 # 2. Chạy Live Crawl từ terminal để thu thập dữ liệu thật
-python3 -m scripts.run_crawler --all --max 15
+python3 -m scripts.run_crawler --all --timeframe 1_week
 
 # 3. Khởi động Web Server
 uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
@@ -124,11 +124,11 @@ Toàn bộ các tầng Normalizer, Deduplicator, Scoring Engine, Crawler Adapter
 XAH không có trang chatbot và không được mở thành public search API. Pipeline chạy theo thứ tự cố định:
 
 1. Gemini vòng 1 chỉ bóc tách dữ liệu có trong bài/gói thầu gốc: tổ chức, nhu cầu, ngân sách, thời hạn, website/mã số thuế nếu xuất hiện trực tiếp.
-2. Website trong bài gốc được kiểm tra lại; nếu chưa có website và bật `COMPANY_ENRICHMENT_MODE=xah`, Gemini chỉ viết query, XAH trả URL thật, backend tải từng URL và Gemini xác minh website chính thức.
-3. Backend crawl website chính thức cùng domain, sâu tối đa 3 và tối đa 60 trang, ưu tiên giới thiệu, lãnh đạo, liên hệ, dự án, tin tức, tuyển dụng và đấu thầu.
-4. Gemini trích xuất `Company Profile`, contact và người có khả năng quyết định. Mỗi dữ liệu lưu được phải có URL và evidence trực tiếp.
-5. Chỉ khi crawl vòng 2 lỗi hoặc còn thiếu trường quan trọng, Gemini tạo query bổ sung; XAH trả URL, backend tự tải nội dung URL rồi Gemini tổng hợp lần cuối.
-6. Nếu vẫn không có dữ liệu, trường giữ `null`/`[]` và hồ sơ ghi `PROFILE_INCOMPLETE`, `WEBSITE_AMBIGUOUS`, `DISCOVERY_FAILED`… Không có rule-based fallback, không đoán website, người, email hay dữ liệu giả.
+2. Nếu vòng 1 có URL hợp lệ, backend crawl website đó trong cùng domain, ưu tiên giới thiệu, lãnh đạo, liên hệ, dự án, tin tức, tuyển dụng và đấu thầu.
+3. Nếu vòng 1 không có URL, Gemini chỉ tạo keyword; XAH Search tự tìm kiếm nội dung web và trả kết quả kèm URL nguồn để Gemini trích xuất hồ sơ. Nhánh này không giả lập một website chính thức và không gọi crawler website trực tiếp.
+4. Nếu nhánh có URL crawl lỗi hoặc còn thiếu trường quan trọng, Gemini tạo query bổ sung; XAH trả URL, backend tải nội dung URL rồi Gemini tổng hợp lần cuối.
+5. Gemini trích xuất `Company Profile`, contact và người có khả năng quyết định. Mỗi dữ liệu lưu được phải có URL và evidence trực tiếp.
+6. Nếu vẫn không có dữ liệu, trường giữ `null`/`[]` và hồ sơ ghi `PROFILE_INCOMPLETE`, `DISCOVERY_FAILED`, `AI_EXTRACTION_FAILED`… Không có rule-based fallback, không đoán website, người, email hay dữ liệu giả.
 
 Ngày đăng luôn ưu tiên metadata đáng tin cậy từ trang nguồn. Nếu trang không cung cấp ngày đăng, hệ thống dùng thời điểm crawl làm ngày đăng; ngày trong tiêu đề/nội dung không được dùng thay thế.
 
@@ -193,4 +193,4 @@ python3 -m venv .venv
 .venv/bin/pytest tests -q
 ```
 
-Chạy test để xác nhận vòng 1 không gọi XAH; vòng 2 chỉ gọi XAH khi crawl thiếu/lỗi, backend tải URL kết quả trước khi Gemini sử dụng, và public search API không tồn tại.
+Chạy test để xác nhận vòng 1 không gọi XAH; vòng 2 crawl trực tiếp khi có URL, dùng dữ liệu XAH trực tiếp khi không có URL, và public search API không tồn tại.

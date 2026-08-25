@@ -91,6 +91,67 @@ async def test_missing_profile_calls_xah_and_loads_result_urls(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_missing_round_one_url_sends_keywords_to_xah_without_direct_crawl(monkeypatch):
+    service = CompanyEnrichmentService()
+    monkeypatch.setattr(settings, "company_enrichment_enabled", True)
+    monkeypatch.setattr(settings, "company_enrichment_mode", "xah")
+    monkeypatch.setattr(settings, "xah_api_key", "test-key")
+
+    generated_targets = []
+    monkeypatch.setattr(
+        service,
+        "_make_queries",
+        lambda name, tax_code, location, targets: (
+            generated_targets.extend(targets) or ['"Công ty ABC" hồ sơ công ty người liên hệ']
+        ),
+    )
+    xah_url = "https://directory.example.com/cong-ty-abc"
+    monkeypatch.setattr(service, "_search_queries", lambda queries: ([{
+        "url": xah_url,
+        "title": "Hồ sơ Công ty ABC",
+        "snippet": "Công ty ABC hoạt động trong lĩnh vực CNTT; Giám đốc CNTT là Nguyễn Văn A.",
+        "query": queries[0],
+        "xah_answer": "XAH tìm thấy hồ sơ và người liên hệ của Công ty ABC.",
+        "published_at": None,
+    }], []))
+
+    async def unexpected_crawl(url):
+        raise AssertionError("Không được crawl website trực tiếp khi vòng 1 không có URL")
+
+    monkeypatch.setattr(service, "_crawl_official_site", unexpected_crawl)
+    monkeypatch.setattr(
+        service,
+        "_load_search_urls",
+        lambda results: (_ for _ in ()).throw(
+            AssertionError("Nhánh không URL phải dùng trực tiếp dữ liệu XAH")
+        ),
+    )
+    prompts = []
+    profile_data = complete_profile(xah_url)
+    profile_data["official_url"] = xah_url
+
+    def extract_profile(prompt):
+        prompts.append(prompt)
+        return profile_data
+
+    monkeypatch.setattr(
+        "app.services.company_enrichment_service.ai_extractor._call_gemini_json",
+        extract_profile,
+    )
+
+    result = await service.enrich("Công ty ABC", "enterprise", None, None, "Hà Nội")
+
+    assert "official_url" in generated_targets
+    assert len(prompts) == 1
+    assert "KẾT QUẢ XAH SEARCH CÓ URL NGUỒN" in prompts[0]
+    assert "Đoạn nội dung XAH thu thập" in prompts[0]
+    assert result.status == "COMPLETE"
+    assert result.xah_used is True
+    assert result.organization["official_url"] == xah_url
+    assert result.source_urls == [xah_url]
+
+
+@pytest.mark.asyncio
 async def test_failed_second_crawl_uses_xah_without_fake_data(monkeypatch):
     service = CompanyEnrichmentService()
     monkeypatch.setattr(settings, "company_enrichment_enabled", True)

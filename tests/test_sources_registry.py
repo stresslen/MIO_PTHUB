@@ -73,15 +73,28 @@ def test_failed_custom_url_is_still_saved_for_later_update(monkeypatch):
         lambda url, resolve_dns=True: (False, "Không phân giải được domain"),
     )
 
-    result = service.add_urls("https://khong-ton-tai.invalid")
+    result = service.add_url("Nguồn thử nghiệm", "https://khong-ton-tai.invalid")
 
     saved = result["items"][0]
     assert result["added"] == 1
     assert result["needs_update"] == 1
     assert saved["status"] == "NEEDS_ADAPTER"
     assert saved["enabled"] is False
+    assert saved["name"] == "Nguồn thử nghiệm"
     assert saved["last_error"] == ERROR_NOTICE
     assert any(row["id"] == saved["id"] for row in sheets.rows)
+
+
+def test_custom_source_accepts_exactly_one_url():
+    sheets = FakeSourceSheets()
+    service = SourceService(sheets)
+    service.bootstrap()
+
+    with pytest.raises(ValueError, match="một URL"):
+        service.add_url(
+            "Hai nguồn",
+            "https://example.test/one\nhttps://example.test/two",
+        )
 
 
 def test_private_network_urls_are_blocked():
@@ -174,8 +187,8 @@ def test_source_import_api_saves_before_probe(monkeypatch):
     }
     monkeypatch.setattr(
         sources_api.source_service,
-        "add_urls",
-        lambda content, include_in_schedule=False: {
+        "add_url",
+        lambda name, url, include_in_schedule=False: {
             "added": 1,
             "duplicates": 0,
             "needs_update": 0,
@@ -191,7 +204,7 @@ def test_source_import_api_saves_before_probe(monkeypatch):
 
     response = TestClient(app).post(
         "/api/sources/import",
-        json={"content": "https://example.test", "include_in_schedule": False},
+        json={"name": "Trang thử nghiệm", "url": "https://example.test", "include_in_schedule": False},
     )
 
     assert response.status_code == 200

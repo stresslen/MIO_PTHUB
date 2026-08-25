@@ -40,7 +40,7 @@ async def main():
 
     if args.run_now:
         print(f"[*] Executing immediate crawl across all 10 sources (Timeframe: {args.timeframe})...")
-        res = await scheduler_service.trigger_immediate_run(timeframe=args.timeframe, max_items=25)
+        res = await scheduler_service.trigger_immediate_run(timeframe=args.timeframe)
         print(f"✅ Immediate run finished: {res}")
         return
 

@@ -144,7 +144,7 @@ def test_manual_crawl_timeframe_validation():
     client = TestClient(app)
     response = client.post(
         "/api/crawl/run?sync=false",
-        json={"source_id": "baodauthau", "timeframe": "invalid", "max_items": 20},
+        json={"source_id": "baodauthau", "timeframe": "invalid"},
     )
     assert response.status_code == 422
 

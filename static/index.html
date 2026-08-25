@@ -310,11 +310,18 @@
             </div>
             <form id="source-form">
                 <div class="modal-body">
-                    <p class="modal-desc">Nhập một URL trên mỗi dòng. Website mới sẽ được crawl trong cùng domain, làm sạch HTML/JavaScript rồi chuyển toàn bộ nội dung hợp lệ cho AI.</p>
-                    <div class="form-group">
-                        <label for="source-url-input">Danh sách URL</label>
-                        <textarea id="source-url-input" class="source-url-textarea" rows="4" maxlength="10000" placeholder="https://example.vn&#10;https://company.com.vn/tin-tuc" required></textarea>
-                        <small class="field-help" id="source-url-preview" aria-live="polite">Tối đa 10 URL mỗi lần</small>
+                    <p class="modal-desc">Đặt tên dễ nhận biết cho nguồn, sau đó nhập URL gốc. Hệ thống sẽ crawl trong cùng domain, làm sạch HTML/JavaScript và chuyển nội dung hợp lệ cho AI.</p>
+                    <div class="source-fields">
+                        <div class="form-group">
+                            <label for="source-name-input">Tên trang</label>
+                            <input id="source-name-input" class="form-control" type="text" maxlength="120" autocomplete="organization" placeholder="Ví dụ: Báo Tiền Phong" required>
+                            <small class="field-help">Tên này sẽ hiển thị trong danh sách nguồn.</small>
+                        </div>
+                        <div class="form-group">
+                            <label for="source-url-input">URL website</label>
+                            <input id="source-url-input" class="form-control" type="url" maxlength="2048" inputmode="url" autocomplete="url" spellcheck="false" placeholder="https://tienphong.vn" required>
+                            <small class="field-help" id="source-url-preview" aria-live="polite">Mỗi lần thêm một URL, hỗ trợ HTTP và HTTPS.</small>
+                        </div>
                     </div>
                     <label class="keyword-option source-schedule-option">
                         <input id="source-include-schedule" type="checkbox">

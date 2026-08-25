@@ -93,7 +93,6 @@ class CrawlerService:
         source_id: str,
         db: Optional[Session] = None,
         force_recrawl: bool = False,
-        max_items: Optional[int] = None,
         timeframe: Optional[str] = "1_week",
         is_manual_fe: bool = False,
     ) -> CrawlRun:
@@ -104,16 +103,15 @@ class CrawlerService:
         """
         if is_manual_fe:
             async with priority_coordinator.fe_priority_context(f"Crawl Source: {source_id}"):
-                return await self._run_crawler_for_source_core(source_id, db, force_recrawl, max_items, timeframe, is_manual_fe=True)
+                return await self._run_crawler_for_source_core(source_id, db, force_recrawl, timeframe, is_manual_fe=True)
         else:
-            return await self._run_crawler_for_source_core(source_id, db, force_recrawl, max_items, timeframe, is_manual_fe=False)
+            return await self._run_crawler_for_source_core(source_id, db, force_recrawl, timeframe, is_manual_fe=False)
 
     async def _run_crawler_for_source_core(
         self,
         source_id: str,
         db: Optional[Session] = None,
         force_recrawl: bool = False,
-        max_items: Optional[int] = None,
         timeframe: Optional[str] = "1_week",
         is_manual_fe: bool = False,
     ) -> CrawlRun:
@@ -140,9 +138,9 @@ class CrawlerService:
         db.refresh(crawl_run)
 
         try:
-            logger.info(f"[{source_id}] Starting live crawl (max_items={max_items}, timeframe={timeframe}, is_manual_fe={is_manual_fe})...")
+            logger.info(f"[{source_id}] Starting live crawl (timeframe={timeframe}, is_manual_fe={is_manual_fe})...")
             # 1. Discover live URLs with timeframe filter
-            discovery_limit = CUSTOM_MAX_PAGES if getattr(adapter, "is_generic", False) else max_items
+            discovery_limit = CUSTOM_MAX_PAGES if getattr(adapter, "is_generic", False) else None
             discovered_urls = await adapter.discover(since=since, max_items=discovery_limit)
             crawl_run.total_discovered = len(discovered_urls)
             db.commit()
@@ -434,7 +432,6 @@ class CrawlerService:
     async def run_all_sources(
         self,
         force_recrawl: bool = False,
-        max_items: Optional[int] = None,
         timeframe: Optional[str] = "1_month",
         batch_size: int = 25,
         is_manual_fe: bool = False,
@@ -445,14 +442,13 @@ class CrawlerService:
         """
         if is_manual_fe:
             async with priority_coordinator.fe_priority_context(f"Crawl All Sources ({timeframe})"):
-                return await self._run_all_sources_core(force_recrawl, max_items, timeframe, batch_size, is_manual_fe=True)
+                return await self._run_all_sources_core(force_recrawl, timeframe, batch_size, is_manual_fe=True)
         else:
-            return await self._run_all_sources_core(force_recrawl, max_items, timeframe, batch_size, is_manual_fe=False)
+            return await self._run_all_sources_core(force_recrawl, timeframe, batch_size, is_manual_fe=False)
 
     async def _run_all_sources_core(
         self,
         force_recrawl: bool = False,
-        max_items: Optional[int] = None,
         timeframe: Optional[str] = "1_month",
         batch_size: int = 25,
         is_manual_fe: bool = False,
@@ -492,7 +488,7 @@ class CrawlerService:
 
             # Discover URLs for this source
             try:
-                discovery_limit = CUSTOM_MAX_PAGES if getattr(adapter, "is_generic", False) else max_items
+                discovery_limit = CUSTOM_MAX_PAGES if getattr(adapter, "is_generic", False) else None
                 urls = await adapter.discover(since=since, max_items=discovery_limit)
                 discovered_map[source_id] = urls
                 run.total_discovered = len(urls)
