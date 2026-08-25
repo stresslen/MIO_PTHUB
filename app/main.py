@@ -76,6 +76,8 @@ def create_app() -> FastAPI:
             else:
                 imported = 0
             logger.info("Hydrated %s leads from Google Sheets.", imported)
+            profile_counts = google_sheets_service.hydrate_profiles_sqlite(cache_db)
+            logger.info("Hydrated round-two profiles from Google Sheets: %s", profile_counts)
             try:
                 synced = google_sheets_service.sync_sqlite(cache_db)
                 logger.info("Synced %s local leads to Google Sheets.", synced)
@@ -83,6 +85,30 @@ def create_app() -> FastAPI:
                 logger.exception("Google Sheets sync failed; continuing with the local cache.")
         finally:
             cache_db.close()
+        try:
+            from app.services.keyword_service import keyword_service
+            keyword_state = keyword_service.bootstrap()
+            logger.info(
+                "Loaded %s keywords from %s.",
+                keyword_state["total"],
+                keyword_state["source"],
+            )
+        except Exception:
+            logger.exception(
+                "Google Sheets keyword sync failed; keeping the last in-memory keyword cache."
+            )
+        try:
+            from app.services.source_service import source_service
+            source_state = source_service.bootstrap()
+            logger.info(
+                "Loaded %s crawler sources from %s.",
+                source_state["total"],
+                source_state["source"],
+            )
+        except Exception:
+            logger.exception(
+                "Google Sheets source sync failed; keeping the last in-memory source cache."
+            )
         logger.info("Starting configurable crawler scheduler...")
         from app.services.scheduler_service import scheduler_service
         scheduler_service.load_persisted_config()

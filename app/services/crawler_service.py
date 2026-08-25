@@ -19,6 +19,8 @@ from app.pipeline.normalize import clean_html, parse_datetime, utc_now
 from app.pipeline.scoring import scoring_engine
 from app.services.priority_service import priority_coordinator
 from app.services.google_sheets_service import google_sheets_service
+from app.services.source_service import CUSTOM_MAX_PAGES, source_service
+from app.services.company_enrichment_service import company_enrichment_service, CompanyEnrichmentResult
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +57,37 @@ class CrawlerService:
     Processes live crawled data end-to-end.
     """
 
+    @staticmethod
+    def _merge_company_contact(extracted, enrichment: CompanyEnrichmentResult) -> None:
+        """Use only source-backed round-two contact/evidence; never synthesize values."""
+        contacts = sorted(
+            enrichment.contacts,
+            key=lambda item: item.get("decision_score") if item.get("decision_score") is not None else -1,
+            reverse=True,
+        )
+        if contacts:
+            primary = contacts[0]
+            extracted.contact_name = extracted.contact_name or primary.get("full_name")
+            extracted.contact_email = extracted.contact_email or primary.get("email")
+            extracted.contact_phone = extracted.contact_phone or primary.get("phone")
+        evidence = list(extracted.evidence or [])
+        for item in enrichment.evidence:
+            note = f"{item.get('evidence_text')} — {item.get('source_url')}"
+            if note not in evidence:
+                evidence.append(note)
+        extracted.evidence = evidence
+
+    async def _enrich_company(self, extracted) -> CompanyEnrichmentResult:
+        result = await company_enrichment_service.enrich(
+            organization_name=extracted.organization_name,
+            organization_type=extracted.organization_type,
+            organization_website=extracted.organization_website,
+            organization_tax_code=extracted.organization_tax_code,
+            location=extracted.location,
+        )
+        self._merge_company_contact(extracted, result)
+        return result
+
     async def run_crawler_for_source(
         self,
         source_id: str,
@@ -90,7 +123,8 @@ class CrawlerService:
             close_db_on_exit = True
 
         adapter = get_adapter(source_id)
-        
+        source_service.record_status(source_id, "RUNNING")
+
         # Calculate since cutoff datetime
         since = calculate_since_datetime(timeframe)
         now = utc_now()
@@ -108,7 +142,8 @@ class CrawlerService:
         try:
             logger.info(f"[{source_id}] Starting live crawl (max_items={max_items}, timeframe={timeframe}, is_manual_fe={is_manual_fe})...")
             # 1. Discover live URLs with timeframe filter
-            discovered_urls = await adapter.discover(since=since, max_items=max_items)
+            discovery_limit = CUSTOM_MAX_PAGES if getattr(adapter, "is_generic", False) else max_items
+            discovered_urls = await adapter.discover(since=since, max_items=discovery_limit)
             crawl_run.total_discovered = len(discovered_urls)
             db.commit()
             logger.info(f"[{source_id}] Discovered {len(discovered_urls)} live URLs")
@@ -141,20 +176,33 @@ class CrawlerService:
                         logger.info(f"[{source_id}] Duplicate skipped: '{parsed.title[:35]}...'")
                         continue
 
-                    # 5. Pre-filter keywords across 5 Groups (A, B, C, D, E)
-                    is_rel, matched_kws, matched_cats = prefilter_keywords(parsed.title, parsed.raw_content)
+                    # 5. User-added websites send every valid HTML page to AI.
+                    if getattr(adapter, "is_generic", False):
+                        is_rel, matched_kws, matched_cats = True, [], ["Website tùy chỉnh"]
+                    else:
+                        is_rel, matched_kws, matched_cats = prefilter_keywords(
+                            parsed.title, parsed.raw_content
+                        )
                     if not is_rel:
                         logger.info(f"[{source_id}] Filtered out (No matching AI/CĐS/Procurement keywords): '{parsed.title[:40]}...'")
                         crawl_run.filtered_out += 1
                         continue
-                    
-                    # 6. AI Extraction (Only invoked for keyword-matched articles)
-                    extracted = ai_extractor.extract(parsed.title, parsed.raw_content, source=source_id)
 
-                    # Merge categories and keywords
+                    # 6. AI Extraction is mandatory; failures never create a lead.
+                    extracted = ai_extractor.extract(
+                        parsed.title,
+                        parsed.raw_content,
+                        source=source_id,
+                        raise_on_api_error=True,
+                    )
+                    if not extracted.organization_name or not extracted.need_summary:
+                        crawl_run.filtered_out += 1
+                        logger.info("[%s] Bỏ qua vì vòng 1 thiếu organization_name hoặc need_summary: %s", source_id, url)
+                        continue
+                    enrichment = await self._enrich_company(extracted)
+
+                    # Merge only categories actually found by keyword matching or AI.
                     combined_categories = list(set(matched_cats + extracted.need_categories))
-                    if not combined_categories:
-                        combined_categories = ["Chuyển đổi số"]
 
                     # Deadline parsing
                     deadline_dt = parse_datetime(extracted.deadline) if extracted.deadline else None
@@ -187,7 +235,7 @@ class CrawlerService:
                         published_at=parsed.published_at,
                         crawled_at=item_crawled_at,
                         organization_name=extracted.organization_name,
-                        organization_type=extracted.organization_type or "government",
+                        organization_type=extracted.organization_type or "other",
                         need_summary=extracted.need_summary,
                         need_categories=combined_categories,
                         budget_value=extracted.budget_value,
@@ -207,12 +255,18 @@ class CrawlerService:
                         raw_content_ref=raw_doc.snapshot_path,
                         content_fingerprint=fingerprint,
                         status="NEW",
+                        enrichment_status=enrichment.status,
+                        enrichment_message=enrichment.message,
                     )
                     db.add(lead)
+                    db.flush()
+                    organization = company_enrichment_service.persist(db, lead, enrichment)
                     crawl_run.new_leads += 1
                     db.commit()
                     db.refresh(lead)
                     await asyncio.to_thread(google_sheets_service.upsert_lead, lead)
+                    if organization is not None:
+                        await asyncio.to_thread(google_sheets_service.upsert_organization_profile, organization.id)
                     logger.info(f"[{source_id}] ✅ Đã lưu Lead đạt chuẩn: '{parsed.title[:40]}...' (Score: {score_res.total_score} - {score_res.recommended_action})")
 
                 except AIAuthenticationError as auth_err:
@@ -263,6 +317,11 @@ class CrawlerService:
                 db.commit()
             except Exception:
                 db.rollback()
+            source_service.record_status(
+                source_id,
+                crawl_run.status,
+                None if crawl_run.error_count == 0 else (crawl_run.error_message or f"{crawl_run.error_count} trang lỗi"),
+            )
             logger.info(f"[{source_id}] Finished crawl run {crawl_run.id}: {crawl_run.new_leads} new leads")
 
         except Exception as e:
@@ -275,6 +334,7 @@ class CrawlerService:
                 db.commit()
             except Exception:
                 db.rollback()
+            source_service.record_status(source_id, "FAILED", e)
 
         finally:
             if close_db_on_exit:
@@ -306,9 +366,11 @@ class CrawlerService:
                     content = lead.title
 
                 extracted = ai_extractor.extract(lead.title, content, source=lead.source, raise_on_api_error=True)
+                if not extracted.organization_name or not extracted.need_summary:
+                    logger.warning("[QueueWorker] Vòng 1 thiếu tổ chức hoặc nhu cầu; giữ trạng thái chưa hoàn thiện: %s", lead.id)
+                    continue
+                enrichment = await self._enrich_company(extracted)
                 combined_cats = list(set((lead.need_categories or []) + extracted.need_categories))
-                if not combined_cats:
-                    combined_cats = ["Chuyển đổi số"]
 
                 deadline_dt = parse_datetime(extracted.deadline) if extracted.deadline else None
                 score_res = scoring_engine.evaluate(
@@ -325,7 +387,7 @@ class CrawlerService:
                     raw_evidence=extracted.evidence,
                 )
 
-                lead.organization_type = extracted.organization_type or "government"
+                lead.organization_type = extracted.organization_type or "other"
                 if score_res.total_score < 40:
                     db.delete(lead)
                     db.commit()
@@ -351,9 +413,12 @@ class CrawlerService:
                 lead.sales_strategy = score_res.sales_strategy_suggestion
                 lead.status = LeadStatusEnum.NEW.value
                 lead.updated_at = utc_now()
+                organization = company_enrichment_service.persist(db, lead, enrichment)
                 db.commit()
                 db.refresh(lead)
                 await asyncio.to_thread(google_sheets_service.upsert_lead, lead)
+                if organization is not None:
+                    await asyncio.to_thread(google_sheets_service.upsert_organization_profile, organization.id)
                 processed_count += 1
                 logger.info(f"[QueueWorker] ✅ Đã xử lý xong lead đạt chuẩn trong hàng đợi: '{lead.title[:40]}' (Score: {score_res.total_score})")
 
@@ -393,7 +458,7 @@ class CrawlerService:
         is_manual_fe: bool = False,
     ) -> List[CrawlRun]:
         logger.info(f"[RoundRobin] 🚀 Bắt đầu crawl xoay vòng đa nguồn (Batch: {batch_size} bài/nguồn, Timeframe: {timeframe}, is_manual_fe={is_manual_fe})...")
-        adapters = get_all_adapters()
+        adapters = get_all_adapters(scheduled_only=not is_manual_fe)
         if not adapters:
             return []
 
@@ -423,10 +488,12 @@ class CrawlerService:
             db.refresh(run)
             crawl_runs[source_id] = run
             index_map[source_id] = 0
+            source_service.record_status(source_id, "RUNNING")
 
             # Discover URLs for this source
             try:
-                urls = await adapter.discover(since=since, max_items=max_items)
+                discovery_limit = CUSTOM_MAX_PAGES if getattr(adapter, "is_generic", False) else max_items
+                urls = await adapter.discover(since=since, max_items=discovery_limit)
                 discovered_map[source_id] = urls
                 run.total_discovered = len(urls)
                 db.commit()
@@ -437,6 +504,7 @@ class CrawlerService:
                 run.status = CrawlStatusEnum.FAILED.value
                 run.error_message = str(disc_err)
                 db.commit()
+                source_service.record_status(source_id, "FAILED", disc_err)
 
         # 2. Round-Robin Batch Execution Loop (Interleaved across all 10 sources)
         round_num = 1
@@ -488,17 +556,25 @@ class CrawlerService:
                             logger.info(f"[{source_id}] Duplicate skipped: '{parsed.title[:35]}...'")
                             continue
 
-                        # Keyword prefiltering (A, B, C, D, E)
-                        is_rel, matched_kws, matched_cats = prefilter_keywords(parsed.title, parsed.raw_content)
+                        # Custom sites bypass keyword filtering: every HTML page goes to AI.
+                        if getattr(adapter, "is_generic", False):
+                            is_rel, matched_kws, matched_cats = True, [], ["Website tùy chỉnh"]
+                        else:
+                            is_rel, matched_kws, matched_cats = prefilter_keywords(
+                                parsed.title, parsed.raw_content
+                            )
                         if not is_rel:
                             run.filtered_out += 1
                             continue
 
-                        # AI Extraction
+                        # AI Extraction (round 1), then verified organization enrichment (round 2).
                         extracted = ai_extractor.extract(parsed.title, parsed.raw_content, source=source_id, raise_on_api_error=True)
+                        if not extracted.organization_name or not extracted.need_summary:
+                            run.filtered_out += 1
+                            logger.info("[%s] Bỏ qua vì vòng 1 thiếu organization_name hoặc need_summary: %s", source_id, url)
+                            continue
+                        enrichment = await self._enrich_company(extracted)
                         combined_categories = list(set(matched_cats + extracted.need_categories))
-                        if not combined_categories:
-                            combined_categories = ["Chuyển đổi số"]
 
                         # AI Lead Scoring
                         deadline_dt = parse_datetime(extracted.deadline) if extracted.deadline else None
@@ -529,7 +605,7 @@ class CrawlerService:
                             published_at=parsed.published_at,
                             crawled_at=item_crawled_at,
                             organization_name=extracted.organization_name,
-                            organization_type=extracted.organization_type or "government",
+                            organization_type=extracted.organization_type or "other",
                             need_summary=extracted.need_summary,
                             need_categories=combined_categories,
                             budget_value=extracted.budget_value,
@@ -549,12 +625,18 @@ class CrawlerService:
                             raw_content_ref=raw_doc.snapshot_path,
                             content_fingerprint=fingerprint,
                             status="NEW",
+                            enrichment_status=enrichment.status,
+                            enrichment_message=enrichment.message,
                         )
                         db.add(lead)
+                        db.flush()
+                        organization = company_enrichment_service.persist(db, lead, enrichment)
                         run.new_leads += 1
                         db.commit()
                         db.refresh(lead)
                         await asyncio.to_thread(google_sheets_service.upsert_lead, lead)
+                        if organization is not None:
+                            await asyncio.to_thread(google_sheets_service.upsert_organization_profile, organization.id)
                         logger.info(f"[{source_id}] ✅ Đã lưu Lead đạt chuẩn: '{parsed.title[:40]}...' (Score: {score_res.total_score} - {score_res.recommended_action})")
 
                     except AIAuthenticationError as auth_err:
@@ -614,6 +696,12 @@ class CrawlerService:
                 db.commit()
             except Exception:
                 db.rollback()
+            source_service.record_status(
+                source_id,
+                run.status,
+                None if run.error_count == 0 and run.status != CrawlStatusEnum.FAILED.value
+                else (run.error_message or f"{run.error_count} trang lỗi"),
+            )
 
         db.expunge_all()
         db.close()

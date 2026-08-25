@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&amp;family=Manrope:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/css/style.css?v=2.0.2">
+    <link rel="stylesheet" href="/static/css/style.css?v=2.2.0">
 </head>
 <body>
     <div class="app-shell">
@@ -87,7 +87,7 @@
                         <div class="select-group">
                             <label for="filter-source">Nguồn</label>
                             <select id="filter-source">
-                                <option value="">Tất cả 10 nguồn</option>
+                                <option value="">Tất cả nguồn đang bật</option>
                                 <option value="muasamcong">Mạng Đấu thầu Quốc gia</option>
                                 <option value="dauthau_asia">DauThau.info</option>
                                 <option value="baodauthau">Báo Đấu thầu</option>
@@ -172,6 +172,14 @@
                             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg>
                             Làm mới
                         </button>
+                        <button class="btn btn-quiet" id="btn-open-sources" type="button">
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+                            Thêm URL
+                        </button>
+                        <button class="btn btn-quiet" id="btn-open-keywords" type="button">
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M4 12h16M4 17h12"/><circle cx="18" cy="7" r="2"/></svg>
+                            Từ khóa
+                        </button>
                         <button class="btn btn-primary btn-trigger-crawl" type="button">
                             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
                             Cào lại dữ liệu
@@ -220,7 +228,7 @@
                 <section class="sources-management-section">
                     <div class="section-title">
                         <div>
-                            <span class="section-kicker">10 kết nối</span>
+                            <span class="section-kicker" id="source-count-kicker">Đang tải nguồn</span>
                             <h2>Danh sách nguồn</h2>
                         </div>
                         <p>Trạng thái và sản lượng dữ liệu của từng cổng thông tin.</p>
@@ -291,6 +299,106 @@
         </div>
     </div>
 
+    <div class="modal-overlay hidden" id="source-modal" role="dialog" aria-modal="true" aria-labelledby="source-modal-title">
+        <div class="modal-card modal-source">
+            <div class="modal-header">
+                <div>
+                    <h2 id="source-modal-title">Thêm website để crawl</h2>
+                    <p class="modal-header-note">URL được lưu trước khi hệ thống kiểm tra kết nối</p>
+                </div>
+                <button class="btn-close" id="btn-close-source-modal" type="button" aria-label="Đóng">×</button>
+            </div>
+            <form id="source-form">
+                <div class="modal-body">
+                    <p class="modal-desc">Nhập một URL trên mỗi dòng. Website mới sẽ được crawl trong cùng domain, làm sạch HTML/JavaScript rồi chuyển toàn bộ nội dung hợp lệ cho AI.</p>
+                    <div class="form-group">
+                        <label for="source-url-input">Danh sách URL</label>
+                        <textarea id="source-url-input" class="source-url-textarea" rows="7" maxlength="10000" placeholder="https://example.vn&#10;https://company.com.vn/tin-tuc" required></textarea>
+                        <small class="field-help" id="source-url-preview" aria-live="polite">Tối đa 10 URL mỗi lần</small>
+                    </div>
+                    <label class="keyword-option source-schedule-option">
+                        <input id="source-include-schedule" type="checkbox">
+                        <span>
+                            <strong>Thêm vào lịch crawl hàng ngày</strong>
+                            <small>Nếu tắt, nguồn vẫn được lưu và có thể chạy thủ công.</small>
+                        </span>
+                    </label>
+                    <p class="source-form-status" id="source-form-status" aria-live="assertive"></p>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-quiet" id="btn-cancel-source" type="button">Hủy</button>
+                    <button class="btn btn-primary" id="btn-save-source" type="submit" disabled>Lưu và kiểm tra URL</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div class="modal-overlay hidden" id="keyword-modal" role="dialog" aria-modal="true" aria-labelledby="keyword-modal-title">
+        <div class="modal-card modal-keywords">
+            <div class="modal-header">
+                <div>
+                    <h2 id="keyword-modal-title">Quản lý từ khóa</h2>
+                    <p class="modal-header-note">Lưu trực tiếp vào worksheet Keywords</p>
+                </div>
+                <button class="btn-close" id="btn-close-keyword-modal" type="button" aria-label="Đóng">×</button>
+            </div>
+            <form id="keyword-form">
+                <div class="modal-body keyword-workspace">
+                    <section class="keyword-import-pane" aria-labelledby="keyword-import-title">
+                        <div class="keyword-section-heading">
+                            <div>
+                                <h3 id="keyword-import-title">Thêm từ khóa</h3>
+                                <p>Ngăn cách bằng dấu phẩy, chấm phẩy hoặc xuống dòng.</p>
+                            </div>
+                            <span class="keyword-preview-count" id="keyword-preview-count" aria-live="polite">0 mục</span>
+                        </div>
+                        <label class="sr-only" for="keyword-input">Danh sách từ khóa</label>
+                        <textarea id="keyword-input" class="keyword-textarea" rows="9" maxlength="1000000" placeholder="chuyển đổi số, quản lý tài sản&#10;camera giám sát; trung tâm dữ liệu"></textarea>
+                        <div class="keyword-file-row">
+                            <input class="sr-only" id="keyword-file" type="file" accept=".txt,.csv,text/plain,text/csv">
+                            <label class="keyword-file-trigger" for="keyword-file">
+                                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4m0 0L8 8m4-4 4 4M5 15v4h14v-4"/></svg>
+                                Chọn file TXT hoặc CSV
+                            </label>
+                            <span id="keyword-file-name">Tối đa 1 MB</span>
+                        </div>
+                        <label class="keyword-option">
+                            <input id="keyword-use-discovery" type="checkbox">
+                            <span>
+                                <strong>Dùng cả cho tìm kiếm trực tiếp</strong>
+                                <small>Mặc định keyword chỉ lọc nội dung. Bật tùy chọn này sẽ tăng số request tới website.</small>
+                            </span>
+                        </label>
+                    </section>
+                    <section class="keyword-library-pane" aria-labelledby="keyword-library-title">
+                        <div class="keyword-section-heading">
+                            <div>
+                                <h3 id="keyword-library-title">Đang hoạt động</h3>
+                                <p id="keyword-source-label">Đang đọc dữ liệu...</p>
+                            </div>
+                            <button class="btn btn-xs btn-outline" id="btn-refresh-keywords" type="button">Đồng bộ Sheet</button>
+                        </div>
+                        <label class="keyword-search">
+                            <span class="sr-only">Tìm trong danh sách keyword</span>
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="m16 16 4 4"/></svg>
+                            <input id="keyword-filter" type="search" placeholder="Lọc danh sách hiện tại..." autocomplete="off">
+                        </label>
+                        <div class="keyword-list" id="keyword-list" aria-live="polite">
+                            <div class="keyword-list-state">Đang tải keyword từ Google Sheets...</div>
+                        </div>
+                    </section>
+                </div>
+                <div class="modal-footer keyword-footer">
+                    <p id="keyword-form-status" aria-live="assertive"></p>
+                    <div>
+                        <button class="btn btn-quiet" id="btn-cancel-keywords" type="button">Đóng</button>
+                        <button class="btn btn-primary" id="btn-save-keywords" type="submit" disabled>Thêm vào Google Sheets</button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <div class="modal-overlay hidden" id="schedule-modal" role="dialog" aria-modal="true" aria-labelledby="schedule-modal-title">
         <div class="modal-card modal-sm">
             <div class="modal-header">
@@ -318,6 +426,6 @@
     </div>
 
     <div class="toast-container" id="toast-container" aria-live="polite"></div>
-    <script src="/static/js/app.js?v=2.0.1"></script>
+    <script src="/static/js/app.js?v=2.2.0"></script>
 </body>
 </html>

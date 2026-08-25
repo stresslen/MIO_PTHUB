@@ -31,6 +31,18 @@ services:
         value: Vietnam
       - key: XAH_API_KEY
         sync: false
+      - key: COMPANY_ENRICHMENT_ENABLED
+        value: true
+      - key: COMPANY_ENRICHMENT_MODE
+        value: xah
+      - key: COMPANY_PROFILE_MAX_PAGES
+        value: 60
+      - key: COMPANY_PROFILE_MAX_DEPTH
+        value: 3
+      - key: COMPANY_PROFILE_CONTEXT_CHARS
+        value: 60000
+      - key: COMPANY_XAH_MAX_QUERIES
+        value: 3
       - key: GEMINI_API_KEY
         sync: false
       - key: GEMINI_MODEL
@@ -43,6 +55,26 @@ services:
         value: gid:0
       - key: GOOGLE_SHEETS_SETTINGS_WORKSHEET
         value: Settings
+      - key: GOOGLE_SHEETS_KEYWORDS_WORKSHEET
+        value: Keywords
+      - key: GOOGLE_SHEETS_SOURCES_WORKSHEET
+        value: Sources
+      - key: GOOGLE_SHEETS_ORGANIZATIONS_WORKSHEET
+        value: Organizations
+      - key: GOOGLE_SHEETS_CONTACTS_WORKSHEET
+        value: Contacts
+      - key: GOOGLE_SHEETS_EVIDENCE_WORKSHEET
+        value: Organization_Evidence
+      - key: GOOGLE_SHEETS_PROJECTS_WORKSHEET
+        value: Projects
+      - key: GOOGLE_SHEETS_NEWS_WORKSHEET
+        value: News
+      - key: GOOGLE_SHEETS_JOBS_WORKSHEET
+        value: Jobs
+      - key: GOOGLE_SHEETS_TENDERS_WORKSHEET
+        value: Tenders
+      - key: GOOGLE_SHEETS_INTERACTIONS_WORKSHEET
+        value: Interactions
       - key: SCHEDULER_ENABLED
         value: true
       - key: SCHEDULER_TIMEZONE

@@ -16,6 +16,7 @@ from sqlalchemy import (
 )
 from pydantic import BaseModel, Field
 from app.database import Base
+from app.models.organization import OrganizationProfileRead
 
 
 class ActionEnum(str, Enum):
@@ -53,7 +54,7 @@ class Lead(Base):
     crawled_at = Column(DateTime, default=datetime.datetime.utcnow, nullable=False, index=True)
 
     organization_name = Column(String(300), nullable=True, index=True)
-    organization_type = Column(String(50), default="government")
+    organization_type = Column(String(50), default="other")
     need_summary = Column(Text, nullable=True)
     need_categories = Column(JSON, default=list)  # List[str]
 
@@ -80,6 +81,9 @@ class Lead(Base):
     sales_strategy = Column(Text, nullable=True)  # AI generated sales strategy & angle
     status = Column(String(30), default="NEW", index=True)  # NEW, CONTACTED, QUALIFIED, DISMISSED
     sales_notes = Column(Text, nullable=True)
+    organization_id = Column(String(36), nullable=True, index=True)
+    enrichment_status = Column(String(50), nullable=True, index=True)
+    enrichment_message = Column(Text, nullable=True)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
 
     __table_args__ = (
@@ -103,7 +107,7 @@ class LeadBase(BaseModel):
     title: str
     published_at: Optional[datetime.datetime] = None
     organization_name: Optional[str] = None
-    organization_type: Optional[str] = "government"
+    organization_type: Optional[str] = "other"
     need_summary: Optional[str] = None
     need_categories: List[str] = Field(default_factory=list)
     budget_value: Optional[float] = None
@@ -121,6 +125,9 @@ class LeadBase(BaseModel):
     evidence: List[str] = Field(default_factory=list)
     sales_strategy: Optional[str] = None
     content_fingerprint: str
+    organization_id: Optional[str] = None
+    enrichment_status: Optional[str] = None
+    enrichment_message: Optional[str] = None
 
 
 class LeadCreate(LeadBase):
@@ -136,6 +143,10 @@ class LeadRead(LeadBase):
 
     class Config:
         from_attributes = True
+
+
+class LeadDetailRead(LeadRead):
+    company_profile: Optional["OrganizationProfileRead"] = None
 
 
 class LeadStatusUpdate(BaseModel):

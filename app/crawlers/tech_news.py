@@ -28,6 +28,17 @@ class VietnamNetAdapter(SourceAdapter):
         )
 
     async def discover(self, since: Optional[datetime.datetime] = None, max_items: Optional[int] = None) -> List[str]:
+        search_urls = await self.discover_from_keyword_search(
+            search_url_template="https://vietnamnet.vn/tim-kiem?q={query}",
+            article_url_pattern=r"https://vietnamnet\.vn/(?!video/).+-\d+\.html$",
+            allowed_hosts={"vietnamnet.vn", "www.vietnamnet.vn"},
+            max_items=max_items,
+        )
+        if search_urls:
+            logger.info("[%s] Using keyword search discovery (%s URLs)", self.source_id, len(search_urls))
+            return search_urls
+        logger.warning("[%s] Search returned no verified URLs; using section discovery", self.source_id)
+
         found_urls: List[str] = []
         for seed in self.seed_urls:
             try:
@@ -85,6 +96,17 @@ class VnExpressAdapter(SourceAdapter):
         )
 
     async def discover(self, since: Optional[datetime.datetime] = None, max_items: Optional[int] = None) -> List[str]:
+        search_urls = await self.discover_from_keyword_search(
+            search_url_template="https://timkiem.vnexpress.net/?q={query}",
+            article_url_pattern=r"https://vnexpress\.net/.+-\d+\.html$",
+            allowed_hosts={"vnexpress.net", "www.vnexpress.net"},
+            max_items=max_items,
+        )
+        if search_urls:
+            logger.info("[%s] Using keyword search discovery (%s URLs)", self.source_id, len(search_urls))
+            return search_urls
+        logger.warning("[%s] Search returned no verified URLs; using section discovery", self.source_id)
+
         found_urls: List[str] = []
         for seed in self.seed_urls:
             try:
@@ -144,6 +166,17 @@ class MostGovAdapter(SourceAdapter):
         )
 
     async def discover(self, since: Optional[datetime.datetime] = None, max_items: Optional[int] = None) -> List[str]:
+        search_urls = await self.discover_from_keyword_search(
+            search_url_template="https://mst.gov.vn/tim-kiem.htm?keywords={query}",
+            article_url_pattern=r"https://mst\.gov\.vn/.+-\d{8,}\.html?$",
+            allowed_hosts={"mst.gov.vn", "www.mst.gov.vn"},
+            max_items=max_items,
+        )
+        if search_urls:
+            logger.info("[%s] Using keyword search discovery (%s URLs)", self.source_id, len(search_urls))
+            return search_urls
+        logger.warning("[%s] Search returned no verified URLs; using section discovery", self.source_id)
+
         found_urls: List[str] = []
         for seed in self.seed_urls:
             try:

@@ -67,14 +67,24 @@ class SourceInfo(BaseModel):
     id: str
     name: str
     base_url: str
+    seed_urls: List[str] = Field(default_factory=list)
     type: str
+    adapter_mode: str = "specialized"
     enabled: bool
+    include_in_schedule: bool = True
     priority: str
     description: str
+    status: str = "READY"
+    last_error: Optional[str] = None
     last_crawl_at: Optional[datetime.datetime] = None
     last_status: Optional[str] = None
     total_leads_count: int = 0
     hot_leads_count: int = 0
+
+
+class SourceImportRequest(BaseModel):
+    content: str = Field(min_length=1, max_length=10000)
+    include_in_schedule: bool = False
 
 
 class TriggerCrawlRequest(BaseModel):

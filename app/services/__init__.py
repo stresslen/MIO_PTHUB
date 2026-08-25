@@ -1,12 +1,5 @@
-from app.services.crawler_service import CrawlerService, crawler_service
-from app.services.lead_service import LeadService, lead_service
-from app.services.export_service import ExportService, export_service
+"""Service package.
 
-__all__ = [
-    "CrawlerService",
-    "crawler_service",
-    "LeadService",
-    "lead_service",
-    "ExportService",
-    "export_service",
-]
+Concrete services are imported from their modules to keep crawler/source registries
+free of circular imports during application startup.
+"""

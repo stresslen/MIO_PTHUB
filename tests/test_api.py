@@ -3,6 +3,7 @@ from fastapi.testclient import TestClient
 from app.main import app
 from app.database import init_db, SessionLocal
 from app.models.lead import Lead, ActionEnum
+from app.models.organization import Organization, OrganizationContact, OrganizationEvidence
 
 
 import pytest
@@ -11,6 +12,14 @@ import pytest
 def setup_test_db():
     init_db()
     db = SessionLocal()
+    organization = Organization(
+        id="test-org-1234", legal_name="UBND TP. Hà Nội",
+        official_url="https://hanoi.gov.vn/", domain="hanoi.gov.vn",
+        organization_type="government", industry="Quản lý nhà nước",
+        profile_status="PROFILE_INCOMPLETE", missing_information=["contacts"],
+        source_urls=["https://hanoi.gov.vn/"],
+    )
+    db.merge(organization)
     # Add a sample test lead
     lead = Lead(
         id="test-lead-1234",
@@ -29,6 +38,8 @@ def setup_test_db():
         score_reasons=["+25 Có gói thầu cụ thể", "+20 Ngân sách 4.2 tỷ", "+10 Hà Nội", "+15 Match Voice AI"],
         content_fingerprint="test_fingerprint_hash_12345",
         status="NEW",
+        organization_id="test-org-1234",
+        enrichment_status="PROFILE_INCOMPLETE",
     )
     db.merge(lead)
     db.commit()
@@ -45,7 +56,12 @@ def teardown_module(module):
     test_lead = db.query(Lead).filter(Lead.id == "test-lead-1234").first()
     if test_lead:
         db.delete(test_lead)
-        db.commit()
+    db.query(OrganizationContact).filter(OrganizationContact.organization_id == "test-org-1234").delete()
+    db.query(OrganizationEvidence).filter(OrganizationEvidence.organization_id == "test-org-1234").delete()
+    organization = db.query(Organization).filter(Organization.id == "test-org-1234").first()
+    if organization:
+        db.delete(organization)
+    db.commit()
     db.close()
 
 
@@ -83,6 +99,8 @@ def test_get_lead_detail_api():
     assert data["id"] == "test-lead-1234"
     assert data["organization_name"] == "UBND TP. Hà Nội"
     assert data["score"] == 92
+    assert data["company_profile"]["official_url"] == "https://hanoi.gov.vn/"
+    assert data["company_profile"]["profile_status"] == "PROFILE_INCOMPLETE"
 
 
 def test_removed_stats_and_crawl_history_endpoints():

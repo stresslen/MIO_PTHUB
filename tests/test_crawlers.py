@@ -1,3 +1,4 @@
+from urllib.parse import unquote_plus
 from app.crawlers import get_adapter, get_all_adapters, CRAWLER_REGISTRY
 from app.crawlers.base import RawDocument
 
@@ -15,6 +16,99 @@ def test_adapter_registry():
     assert "vietnamnet" in adapters
     assert "vnexpress" in adapters
     assert "hanoi_gov" in adapters
+
+
+
+async def test_vnexpress_searches_by_keyword_before_sections(monkeypatch):
+    adapter = get_adapter("vnexpress")
+    requested_urls = []
+
+    async def fake_fetch(url):
+        requested_urls.append(unquote_plus(url))
+        if "timkiem.vnexpress.net" in url:
+            html = """
+            <article>
+              <h3>Doanh nghiệp đẩy mạnh chuyển đổi số</h3>
+              <a href="https://vnexpress.net/doanh-nghiep-day-manh-chuyen-doi-so-5112386.html">Xem bài</a>
+            </article>
+            <article>
+              <h3>Nội dung không liên quan</h3>
+              <a href="https://evil.example/bai-viet-5119999.html">Sai domain</a>
+            </article>
+            """
+        else:
+            raise AssertionError("Không được tải trang chuyên mục khi search đã có kết quả")
+        return RawDocument(url=url, source_id="vnexpress", html=html, text="")
+
+    monkeypatch.setattr(adapter, "fetch", fake_fetch)
+    monkeypatch.setattr(
+        adapter,
+        "_discovery_search_keywords",
+        lambda max_items=None: ["chuyển đổi số"],
+    )
+
+    urls = await adapter.discover(max_items=10)
+
+    assert urls == ["https://vnexpress.net/doanh-nghiep-day-manh-chuyen-doi-so-5112386.html"]
+    assert requested_urls == ["https://timkiem.vnexpress.net/?q=chuyển đổi số"]
+
+
+async def test_vnexpress_uses_sections_when_search_has_no_verified_result(monkeypatch):
+    adapter = get_adapter("vnexpress")
+
+    async def fake_fetch(url):
+        if "timkiem.vnexpress.net" in url:
+            html = "<html><body>Không có kết quả phù hợp</body></html>"
+        else:
+            html = """
+            <a href="https://vnexpress.net/so-hoa/he-thong-ai-moi-5112387.html">Hệ thống AI mới</a>
+            """
+        return RawDocument(url=url, source_id="vnexpress", html=html, text="")
+
+    monkeypatch.setattr(adapter, "fetch", fake_fetch)
+    monkeypatch.setattr(
+        adapter,
+        "_discovery_search_keywords",
+        lambda max_items=None: ["chuyển đổi số"],
+    )
+
+    urls = await adapter.discover(max_items=10)
+
+    assert urls == ["https://vnexpress.net/so-hoa/he-thong-ai-moi-5112387.html"]
+
+
+async def test_keyword_search_rejects_navigation_and_balances_queries(monkeypatch):
+    adapter = get_adapter("vietnamnet")
+
+    async def fake_fetch(url):
+        keyword = "chuyển đổi số" if "chuy%E1%BB%83n" in url else "phần mềm"
+        slug = "chuyen-doi-so" if keyword == "chuyển đổi số" else "phan-mem"
+        html = f"""
+        <article><h3>{keyword} cho doanh nghiệp</h3>
+          <a href="https://vietnamnet.vn/{slug}-cho-doanh-nghiep-2547001.html">Bài 1</a>
+        </article>
+        <nav><a href="https://vietnamnet.vn/menu-2547999.html">{keyword}</a></nav>
+        """
+        return RawDocument(url=url, source_id="vietnamnet", html=html, text="")
+
+    monkeypatch.setattr(adapter, "fetch", fake_fetch)
+    monkeypatch.setattr(
+        adapter,
+        "_discovery_search_keywords",
+        lambda max_items=None: ["chuyển đổi số", "phần mềm"],
+    )
+
+    urls = await adapter.discover_from_keyword_search(
+        search_url_template="https://vietnamnet.vn/tim-kiem?q={query}",
+        article_url_pattern=r"https://vietnamnet\.vn/.+-\d+\.html$",
+        allowed_hosts={"vietnamnet.vn"},
+        max_items=2,
+    )
+
+    assert len(urls) == 2
+    assert any("chuyen-doi-so" in url for url in urls)
+    assert any("phan-mem" in url for url in urls)
+    assert all("menu" not in url for url in urls)
 
 
 async def test_baodauthau_parser():

@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.lead import (
     LeadRead,
+    LeadDetailRead,
     LeadStatusUpdate,
     LeadFilterParams,
     ActionEnum,
@@ -14,6 +15,7 @@ from app.models.lead import (
 )
 from app.services.lead_service import lead_service
 from app.services.google_sheets_service import google_sheets_service
+from app.services.company_enrichment_service import company_enrichment_service
 
 router = APIRouter(prefix="/leads", tags=["Leads"])
 
@@ -64,13 +66,15 @@ def get_leads(
     }
 
 
-@router.get("/{lead_id}", response_model=LeadRead)
+@router.get("/{lead_id}", response_model=LeadDetailRead)
 def get_lead_detail(lead_id: str, db: Session = Depends(get_db)):
     """Retrieve detailed information, evidence, and score reasons for a lead."""
     lead = lead_service.get_lead_by_id(db, lead_id)
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
-    return LeadRead.model_validate(lead)
+    payload = LeadRead.model_validate(lead).model_dump()
+    payload["company_profile"] = company_enrichment_service.read_profile(db, lead.organization_id)
+    return LeadDetailRead(**payload)
 
 
 @router.patch("/{lead_id}/status", response_model=LeadRead)

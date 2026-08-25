@@ -3,6 +3,18 @@
 # Chia thành 5 Nhóm Từ Khóa (A, B, C, D, E) và Cơ Chế Tìm Kiếm Kết Hợp
 # ==============================================================================
 
+# Các cụm có tín hiệu cao dùng ở tầng tìm kiếm của website. Không dùng từ "AI"
+# độc lập vì trong tiếng Việt nó dễ khớp nhầm với đại từ "ai".
+discovery_search:
+  max_queries: 6
+  keywords:
+    - "chuyển đổi số"
+    - "trí tuệ nhân tạo"
+    - "số hóa"
+    - "công nghệ thông tin"
+    - "phần mềm"
+    - "cơ sở dữ liệu"
+
 keyword_groups:
   # Nhóm A — Công nghệ (Core Tech & AI Solutions)
   group_a_technology:

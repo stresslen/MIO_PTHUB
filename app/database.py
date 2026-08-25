@@ -41,6 +41,7 @@ def init_db() -> None:
     """Initialize database tables and run automatic migrations."""
     import app.models.lead  # noqa: F401
     import app.models.source  # noqa: F401
+    import app.models.organization  # noqa: F401
     Base.metadata.create_all(bind=engine)
 
     # SQLite column migration check
@@ -49,8 +50,15 @@ def init_db() -> None:
             # Check if sales_strategy column exists in leads
             result = conn.exec_driver_sql("PRAGMA table_info(leads)")
             columns = [row[1] for row in result.fetchall()]
-            if "sales_strategy" not in columns and len(columns) > 0:
-                conn.exec_driver_sql("ALTER TABLE leads ADD COLUMN sales_strategy TEXT")
-                conn.commit()
+            migrations = {
+                "sales_strategy": "ALTER TABLE leads ADD COLUMN sales_strategy TEXT",
+                "organization_id": "ALTER TABLE leads ADD COLUMN organization_id VARCHAR(36)",
+                "enrichment_status": "ALTER TABLE leads ADD COLUMN enrichment_status VARCHAR(50)",
+                "enrichment_message": "ALTER TABLE leads ADD COLUMN enrichment_message TEXT",
+            }
+            for column, statement in migrations.items():
+                if column not in columns and len(columns) > 0:
+                    conn.exec_driver_sql(statement)
+            conn.commit()
         except Exception:
             pass

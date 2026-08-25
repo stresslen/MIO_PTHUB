@@ -58,11 +58,31 @@ class Settings(BaseSettings):
     xah_language: str = "Vietnam"
     xah_timeout_seconds: int = 60
 
+    # Round-two organization enrichment. XAH is an explicit part of this mode:
+    # it discovers/verifies an official site and fills material gaps left after
+    # crawling that verified site. It is never used to invent missing values.
+    company_enrichment_enabled: bool = True
+    company_enrichment_mode: str = "xah"
+    company_profile_max_pages: int = 60
+    company_profile_max_depth: int = 3
+    company_profile_context_chars: int = 60000
+    company_xah_max_queries: int = 3
+
     # Google Sheets durable database (SQLite is only a local query cache)
     google_sheets_spreadsheet_id: str | None = None
     google_service_account_json: str | None = None
     google_sheets_leads_worksheet: str = "Leads"
     google_sheets_settings_worksheet: str = "Settings"
+    google_sheets_keywords_worksheet: str = "Keywords"
+    google_sheets_sources_worksheet: str = "Sources"
+    google_sheets_organizations_worksheet: str = "Organizations"
+    google_sheets_contacts_worksheet: str = "Contacts"
+    google_sheets_evidence_worksheet: str = "Organization_Evidence"
+    google_sheets_projects_worksheet: str = "Projects"
+    google_sheets_news_worksheet: str = "News"
+    google_sheets_jobs_worksheet: str = "Jobs"
+    google_sheets_tenders_worksheet: str = "Tenders"
+    google_sheets_interactions_worksheet: str = "Interactions"
 
     # Scheduler defaults (Vietnam local time)
     scheduler_enabled: bool = True

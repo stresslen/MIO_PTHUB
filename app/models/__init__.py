@@ -3,6 +3,7 @@ from app.models.lead import (
     LeadBase,
     LeadCreate,
     LeadRead,
+    LeadDetailRead,
     LeadStatusUpdate,
     LeadFilterParams,
     ActionEnum,
@@ -12,6 +13,7 @@ from app.models.source import (
     CrawlRun,
     CrawlRunRead,
     SourceInfo,
+    SourceImportRequest,
     TriggerCrawlRequest,
     CrawlStatusEnum,
 )
@@ -26,6 +28,7 @@ __all__ = [
     "LeadBase",
     "LeadCreate",
     "LeadRead",
+    "LeadDetailRead",
     "LeadStatusUpdate",
     "LeadFilterParams",
     "ActionEnum",
@@ -33,9 +36,21 @@ __all__ = [
     "CrawlRun",
     "CrawlRunRead",
     "SourceInfo",
+    "SourceImportRequest",
     "TriggerCrawlRequest",
     "CrawlStatusEnum",
     "ScoreResult",
     "ScoreBreakdownItem",
     "AIExtractionResult",
+    "Organization",
+    "OrganizationContact",
+    "OrganizationEvidence",
+    "OrganizationProfileRead",
+    "ContactProfile",
+    "EvidenceProfile",
 ]
+
+from app.models.organization import (
+    Organization, OrganizationContact, OrganizationEvidence,
+    OrganizationProfileRead, ContactProfile, EvidenceProfile,
+)

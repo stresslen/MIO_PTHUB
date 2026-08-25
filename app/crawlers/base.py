@@ -5,16 +5,20 @@ import datetime
 import hashlib
 import json
 import logging
+import math
 import re
 import ssl
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from urllib.parse import quote_plus, urljoin, urlparse
 import requests
 import urllib3
+from bs4 import BeautifulSoup
 from pydantic import BaseModel, Field
 
 from app.config import RAW_DATA_DIR, settings
+from app.services.keyword_service import keyword_service
 from app.pipeline.normalize import canonicalize_url, clean_html, normalize_unicode, parse_datetime, utc_now
 
 urllib3.disable_warnings()
@@ -202,6 +206,91 @@ class SourceAdapter(ABC):
         """Discover live URLs from seed pages or search listings."""
         pass
 
+    def _discovery_search_keywords(self, max_items: Optional[int] = None) -> List[str]:
+        search_config = keyword_service.get_config().get("discovery_search", {})
+        keywords = [
+            normalize_unicode(str(value))
+            for value in search_config.get("keywords", [])
+            if normalize_unicode(str(value))
+        ]
+        max_queries = max(1, int(search_config.get("max_queries", 6)))
+        if max_items:
+            max_queries = min(max_queries, max_items)
+        return keywords[:max_queries]
+
+    async def discover_from_keyword_search(
+        self,
+        search_url_template: str,
+        article_url_pattern: str,
+        allowed_hosts: set[str],
+        max_items: Optional[int] = None,
+    ) -> List[str]:
+        """Search a source by configured keywords and return verified article URLs.
+
+        Search results are balanced across queries. A candidate must belong to an
+        allowed host, match the source's article URL shape, and contain the query
+        in its visible title/snippet. Full article content is still checked later.
+        """
+        keywords = self._discovery_search_keywords(max_items=max_items)
+        if not keywords:
+            return []
+
+        per_query_limit = max(
+            1,
+            math.ceil((max_items or len(keywords) * 10) / len(keywords)),
+        )
+        found_urls: List[str] = []
+
+        for keyword in keywords:
+            search_url = search_url_template.format(query=quote_plus(keyword))
+            try:
+                raw_doc = await self.fetch(search_url)
+                soup = BeautifulSoup(raw_doc.html, "html.parser")
+                query_urls: List[str] = []
+
+                for anchor in soup.find_all("a", href=True):
+                    href = str(anchor.get("href") or "").strip()
+                    if not href or href.startswith(("javascript:", "mailto:", "tel:")):
+                        continue
+                    if anchor.find_parent(["nav", "header", "footer", "aside"]):
+                        continue
+                    full_url = canonicalize_url(urljoin(search_url, href))
+                    host = (urlparse(full_url).hostname or "").lower()
+                    if host not in allowed_hosts or not re.search(article_url_pattern, full_url, re.IGNORECASE):
+                        continue
+
+                    context_node = anchor.find_parent(["article", "li"])
+                    if context_node is None:
+                        context_node = anchor.find_parent("div")
+                    context = normalize_unicode(
+                        (context_node or anchor).get_text(" ", strip=True)
+                    ).lower()
+                    if keyword.lower() not in context:
+                        continue
+                    if full_url in found_urls or full_url in query_urls:
+                        continue
+
+                    query_urls.append(full_url)
+                    if len(query_urls) >= per_query_limit:
+                        break
+
+                found_urls.extend(query_urls)
+                logger.info(
+                    "[%s] Keyword search '%s' found %s candidate URLs",
+                    self.source_id,
+                    keyword,
+                    len(query_urls),
+                )
+            except Exception as exc:
+                logger.warning(
+                    "[%s] Keyword search failed for '%s': %s",
+                    self.source_id,
+                    keyword,
+                    exc,
+                )
+
+        return found_urls[:max_items] if max_items else found_urls
+
     async def fetch(self, url: str) -> RawDocument:
         """
         Fetch live page content with retry, exponential backoff, rate limiting,
@@ -252,13 +341,9 @@ class SourceAdapter(ABC):
                 if attempt < settings.max_retries:
                     await asyncio.sleep(settings.retry_backoff_factor * (attempt + 1))
 
-        # Check for stored snapshot fallback if live site is temporarily unreachable
-        fallback = self._load_fallback_snapshot(url)
-        if fallback:
-            logger.info(f"[{self.source_id}] Using offline snapshot fallback for {url}")
-            return fallback
-
-        raise RuntimeError(f"Failed to fetch {url} after {settings.max_retries + 1} attempts: {last_error}")
+        raise RuntimeError(
+            f"Failed to fetch {url} after {settings.max_retries + 1} attempts: {last_error}"
+        )
 
     @abstractmethod
     async def parse(self, raw: RawDocument) -> ParsedItem:
@@ -276,24 +361,3 @@ class SourceAdapter(ABC):
         with open(file_path, "w", encoding="utf-8") as f:
             f.write(html_content)
         return file_path
-
-    def _load_fallback_snapshot(self, url: str) -> Optional[RawDocument]:
-        url_hash = hashlib.sha256(url.encode("utf-8")).hexdigest()[:16]
-        source_dir = RAW_DATA_DIR / self.source_id
-        if not source_dir.exists():
-            return None
-        for file in source_dir.rglob(f"{url_hash}.html"):
-            try:
-                with open(file, "r", encoding="utf-8") as f:
-                    content = f.read()
-                return RawDocument(
-                    url=url,
-                    source_id=self.source_id,
-                    html=content,
-                    text=clean_html(content),
-                    status_code=200,
-                    snapshot_path=str(file),
-                )
-            except Exception:
-                pass
-        return None

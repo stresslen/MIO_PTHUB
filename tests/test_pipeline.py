@@ -109,6 +109,18 @@ def test_strict_extraction_prompt_separates_publication_date_and_deadline():
     assert '"Đang cập nhật"' in prompt
 
 
+def test_round_one_rejects_website_not_present_in_source():
+    data = {"organization_website": "https://invented.example.vn"}
+    rejected = ai_extractor._keep_source_backed_website(data, "Bài gốc không có đường dẫn công ty")
+    assert rejected["organization_website"] is None
+
+    accepted = ai_extractor._keep_source_backed_website(
+        {"organization_website": "https://abc.vn/gioi-thieu"},
+        "Thông tin tham khảo tại abc.vn",
+    )
+    assert accepted["organization_website"] == "https://abc.vn/gioi-thieu"
+
+
 def test_ai_401_is_classified_as_authentication_error(monkeypatch):
     import pytest
     from app.config import settings

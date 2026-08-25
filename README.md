@@ -20,8 +20,8 @@ MIO/
 │   ├── config.py            # Global Settings & YAML Config Loaders
 │   └── main.py              # FastAPI Entrypoint & Security Headers Middleware
 ├── configs/
-│   ├── sources.yaml         # Cấu hình nguồn cào, seed URLs, timeouts, rate limits
-│   ├── keywords.yaml        # Danh mục từ khóa mục tiêu (OCR, CV, Voice, LLM, CĐS...)
+│   ├── sources.yaml         # Dữ liệu bootstrap lần đầu cho worksheet Sources
+│   ├── keywords.yaml        # Dữ liệu bootstrap lần đầu cho worksheet Keywords
 │   └── scoring.yaml         # Trọng số chấm điểm & ngưỡng phân loại hành động
 ├── data/
 │   ├── raw/                 # Lưu trữ raw snapshot (HTML/JSON) phục vụ audit & replay
@@ -53,7 +53,7 @@ MIO/
 ### 2. Pipeline Xử Lý Thông Minh & AI Extraction
 - **Chuẩn hóa nâng cao (Normalize)**: Parser tiền tệ tiếng Việt thông minh (`"4,5 tỷ VNĐ"` -> `4,500,000,000 VND`), parser ngày tháng đa định dạng, chuẩn hóa tên đơn vị & 63 tỉnh thành.
 - **Chống trùng lặp (Deduplication)**: Fingerprint băm SHA-256 xác định duy nhất từng bài đăng / gói thầu (`canonical_url + published_date + normalized_title`).
-- **Trích xuất thực thể AI (AI Extractor)**: Trích xuất có cấu trúc: Tên đơn vị, loại hình tổ chức (Government/Enterprise), tóm tắt nhu cầu (1-3 câu), ngân sách, địa bàn, người liên hệ, email, số điện thoại, hạn nộp hồ sơ, minh chứng trích dẫn (`evidence`). Hỗ trợ cả LLM (OpenAI/Gemini) và bộ NLP Rule-based thông minh chạy offline 100%.
+- **Trích xuất thực thể AI (AI Extractor)**: Trích xuất có cấu trúc: Tên đơn vị, loại hình tổ chức (Government/Enterprise), tóm tắt nhu cầu (1-3 câu), ngân sách, địa bàn, người liên hệ, email, số điện thoại, hạn nộp hồ sơ, minh chứng trích dẫn (`evidence`). AI extraction và scoring là bắt buộc; phản hồi lỗi/không hợp lệ khiến mục đó bị bỏ qua thay vì nhận dữ liệu hoặc điểm giả.
 
 ### 3. Bộ Chấm Điểm Lead Linh Hoạt (Scoring Engine)
 Tách biệt hoàn toàn trong `configs/scoring.yaml`, Sales có thể chỉnh trọng số mà không sửa code:
@@ -119,23 +119,24 @@ Toàn bộ các tầng Normalizer, Deduplicator, Scoring Engine, Crawler Adapter
 
 ## Gemini tự bổ sung dữ liệu bằng XAH, Google Sheets và Render
 
-### Luồng Gemini → XAH nội bộ
+### Luồng vòng 1 → vòng 2 → XAH có kiểm chứng
 
-XAH không có trang chatbot và không được mở thành public search API. Trong lúc bóc tách một bài crawl, Gemini trả thêm ba trường điều khiển nội bộ: `needs_web_search`, `missing_information` và `search_query`.
+XAH không có trang chatbot và không được mở thành public search API. Pipeline chạy theo thứ tự cố định:
 
-1. Gemini xử lý nội dung gốc trước.
-2. Nếu Gemini xác định thiếu thông tin quan trọng cho việc đánh giá lead, backend gọi `POST https://api.xah.io/v1/search` với `model=search`, `search_type=web`, `max_results=5`, `country=Vietnam`, `language=Vietnam`.
-3. Kết quả XAH và URL nguồn được đưa vào lượt Gemini thứ hai.
-4. Gemini hoàn thiện dữ liệu; URL XAH được lưu trong `evidence` để kiểm tra nguồn.
-5. Nếu XAH lỗi hoặc không có dữ liệu, pipeline giữ kết quả Gemini ban đầu và tiếp tục, không làm hỏng phiên crawl.
+1. Gemini vòng 1 chỉ bóc tách dữ liệu có trong bài/gói thầu gốc: tổ chức, nhu cầu, ngân sách, thời hạn, website/mã số thuế nếu xuất hiện trực tiếp.
+2. Website trong bài gốc được kiểm tra lại; nếu chưa có website và bật `COMPANY_ENRICHMENT_MODE=xah`, Gemini chỉ viết query, XAH trả URL thật, backend tải từng URL và Gemini xác minh website chính thức.
+3. Backend crawl website chính thức cùng domain, sâu tối đa 3 và tối đa 60 trang, ưu tiên giới thiệu, lãnh đạo, liên hệ, dự án, tin tức, tuyển dụng và đấu thầu.
+4. Gemini trích xuất `Company Profile`, contact và người có khả năng quyết định. Mỗi dữ liệu lưu được phải có URL và evidence trực tiếp.
+5. Chỉ khi crawl vòng 2 lỗi hoặc còn thiếu trường quan trọng, Gemini tạo query bổ sung; XAH trả URL, backend tự tải nội dung URL rồi Gemini tổng hợp lần cuối.
+6. Nếu vẫn không có dữ liệu, trường giữ `null`/`[]` và hồ sơ ghi `PROFILE_INCOMPLETE`, `WEBSITE_AMBIGUOUS`, `DISCOVERY_FAILED`… Không có rule-based fallback, không đoán website, người, email hay dữ liệu giả.
 
-Ngày đăng luôn ưu tiên metadata đáng tin cậy từ trang nguồn. Nếu trang không cung cấp ngày đăng, hệ thống dùng chính thời điểm crawl làm ngày đăng; ngày xuất hiện trong tiêu đề/nội dung (hạn nộp, hạn hoàn thành, ngày sự kiện) không được dùng thay thế.
+Ngày đăng luôn ưu tiên metadata đáng tin cậy từ trang nguồn. Nếu trang không cung cấp ngày đăng, hệ thống dùng thời điểm crawl làm ngày đăng; ngày trong tiêu đề/nội dung không được dùng thay thế.
 
 API key chỉ đọc từ `XAH_API_KEY` trên backend. File `.env` được loại khỏi Git và Docker build context.
 
 ### Google Sheets làm database bền vững
 
-Google Sheets là nguồn lưu bền vững; SQLite chỉ là cache truy vấn cục bộ để giữ nguyên các bộ lọc/dashboard SQL đang có. Khi khởi động, backend hợp nhất hai chiều: nạp dữ liệu từ Sheets vào cache rồi chuyển các lead cục bộ còn thiếu lên Sheets. Mỗi lead mới và thay đổi trạng thái tiếp tục được ghi lên Sheets; nguồn XAH bổ sung nằm trong trường `evidence`.
+Google Sheets là nguồn lưu bền vững; SQLite chỉ là cache truy vấn cục bộ để giữ nguyên các bộ lọc/dashboard SQL đang có. Khi khởi động, backend hợp nhất hai chiều: nạp dữ liệu từ Sheets vào cache rồi chuyển các lead cục bộ còn thiếu lên Sheets. Mỗi lead mới và thay đổi trạng thái tiếp tục được ghi lên Sheets; hồ sơ vòng 2 được upsert vào các tab riêng và giữ URL/evidence để kiểm tra.
 
 Setup một lần:
 
@@ -149,11 +150,23 @@ GOOGLE_SHEETS_SPREADSHEET_ID=17Glsl0gB7e0YKWAmxPdDUSDysGaeujudmN21Gts0GFw
 GOOGLE_SERVICE_ACCOUNT_JSON=<toàn bộ JSON trên một dòng hoặc base64 của JSON>
 GOOGLE_SHEETS_LEADS_WORKSHEET=gid:0
 GOOGLE_SHEETS_SETTINGS_WORKSHEET=Settings
+GOOGLE_SHEETS_KEYWORDS_WORKSHEET=Keywords
+GOOGLE_SHEETS_SOURCES_WORKSHEET=Sources
+GOOGLE_SHEETS_ORGANIZATIONS_WORKSHEET=Organizations
+GOOGLE_SHEETS_CONTACTS_WORKSHEET=Contacts
+GOOGLE_SHEETS_EVIDENCE_WORKSHEET=Organization_Evidence
+GOOGLE_SHEETS_PROJECTS_WORKSHEET=Projects
+GOOGLE_SHEETS_NEWS_WORKSHEET=News
+GOOGLE_SHEETS_JOBS_WORKSHEET=Jobs
+GOOGLE_SHEETS_TENDERS_WORKSHEET=Tenders
+GOOGLE_SHEETS_INTERACTIONS_WORKSHEET=Interactions
 ```
 
-Backend ghi lead trực tiếp vào tab `gid=0`, đồng thời tự tạo worksheet `Settings` và header khi kết nối lần đầu. Để chuyển dữ liệu hiện có ngay, chạy `.venv/bin/python -m scripts.migrate_to_google_sheets`. Kiểm tra trạng thái an toàn tại `GET /api/storage/status`; endpoint này không bao giờ trả credential.
+Backend ghi lead trực tiếp vào tab `gid=0`, đồng thời tự tạo worksheet `Settings`, `Keywords`, `Sources`, `Organizations`, `Contacts`, `Organization_Evidence`, `Projects`, `News`, `Jobs`, `Tenders`, `Interactions` và header khi kết nối lần đầu. `configs/keywords.yaml` chỉ seed dữ liệu khi tab `Keywords` còn trống; sau đó pipeline đọc keyword từ cache đồng bộ với Google Sheets. Để chuyển dữ liệu lead hiện có ngay, chạy `.venv/bin/python -m scripts.migrate_to_google_sheets`. Kiểm tra trạng thái an toàn tại `GET /api/storage/status`; endpoint này không bao giờ trả credential.
 
-Sau khi `GOOGLE_SERVICE_ACCOUNT_JSON` được cấu hình, mỗi lead mới, lead chờ AI, lead xử lý lại và thay đổi trạng thái trên dashboard đều được upsert ngay vào Google Sheets. Không cần mở Sheet hoặc chạy thao tác dán dữ liệu thủ công.
+Toàn bộ 10 nguồn và 19 seed URL được lưu trong worksheet `Sources`; `configs/sources.yaml` chỉ seed khi worksheet trống. Nút **Thêm URL** lưu website mới trước khi kiểm tra. Nguồn không crawl được vẫn nằm trong Sheet với trạng thái `NEEDS_ADAPTER` và thông báo cần cập nhật sau.
+
+Trên trang **Nguồn dữ liệu**, nút **Từ khóa** cho phép nhập TXT/CSV, chuỗi phân cách bằng `,` hoặc `;`, và danh sách xuống dòng. Keyword mới được ghi thẳng vào Sheet, chống trùng không phân biệt chữ hoa/thường và dùng ngay sau khi đồng bộ. Chỉ lead đã qua AI xử lý hợp lệ mới được upsert vào worksheet Leads.
 
 ### Cào thủ công và đặt lịch
 
@@ -180,4 +193,4 @@ python3 -m venv .venv
 .venv/bin/pytest tests -q
 ```
 
-Chạy test để xác nhận XAH chỉ được gọi khi Gemini đánh dấu thiếu thông tin và public search API không tồn tại.
+Chạy test để xác nhận vòng 1 không gọi XAH; vòng 2 chỉ gọi XAH khi crawl thiếu/lỗi, backend tải URL kết quả trước khi Gemini sử dụng, và public search API không tồn tại.

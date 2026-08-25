@@ -21,7 +21,9 @@ class ScoreResult(BaseModel):
 
 class AIExtractionResult(BaseModel):
     organization_name: Optional[str] = None
-    organization_type: str = "government"
+    organization_type: Optional[str] = None
+    organization_website: Optional[str] = None
+    organization_tax_code: Optional[str] = None
     need_summary: Optional[str] = None
     need_categories: List[str] = Field(default_factory=list)
     budget_value: Optional[float] = None
