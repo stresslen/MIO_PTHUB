@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&amp;family=Manrope:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/css/style.css?v=2.4.0">
+    <link rel="stylesheet" href="/static/css/style.css?v=2.5.0">
 </head>
 <body>
     <div class="app-shell">
@@ -42,18 +42,16 @@
                         <span class="eyebrow">Opportunity desk</span>
                         <h1>Cơ hội thị trường</h1>
                         <p class="subtitle">Theo dõi nhu cầu đầu tư số từ các tổ chức và cơ quan tại Việt Nam.</p>
-                        <div class="prompt-shortcuts" aria-label="Cấu hình Gemini">
-                            <button class="btn btn-quiet btn-sm" id="btn-open-scoring-prompt" type="button">
-                                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M4 17h16M18 7h2M4 12h3m4 0h9"/><circle cx="16" cy="7" r="2"/><circle cx="9" cy="12" r="2"/></svg>
-                                Thiết lập chấm điểm
-                            </button>
-                            <button class="btn btn-quiet btn-sm" id="btn-open-sales-prompt" type="button">
-                                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h14v11H9l-4 3V5Z"/><path d="M8 9h8M8 12h5"/></svg>
-                                Thiết lập kịch bản Sales
-                            </button>
-                        </div>
                     </div>
                     <div class="header-actions">
+                        <button class="btn btn-quiet" id="btn-open-scoring-prompt" type="button">
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M4 17h16M18 7h2M4 12h3m4 0h9"/><circle cx="16" cy="7" r="2"/><circle cx="9" cy="12" r="2"/></svg>
+                            Chấm điểm
+                        </button>
+                        <button class="btn btn-quiet" id="btn-open-sales-prompt" type="button">
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h14v11H9l-4 3V5Z"/><path d="M8 9h8M8 12h5"/></svg>
+                            Kịch bản Sales
+                        </button>
                         <button class="btn btn-quiet" id="btn-refresh" type="button">
                             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg>
                             Làm mới
@@ -165,7 +163,6 @@
                     <div class="header-title">
                         <span class="eyebrow">Data operations</span>
                         <h1>Nguồn dữ liệu</h1>
-                        <p class="subtitle">Kiểm soát kết nối, lịch chạy và trạng thái thu thập của từng nguồn.</p>
                     </div>
                     <div class="header-actions">
                         <button class="btn btn-quiet" id="btn-refresh-sources" type="button">
@@ -326,7 +323,7 @@
                 <div class="form-group">
                     <label for="crawl-source-select">Nguồn thu thập</label>
                     <select id="crawl-source-select" class="form-control">
-                        <option value="">Tất cả 10 nguồn</option>
+                        <option value="">Tất cả nguồn đang bật</option>
                         <option value="muasamcong">Mạng Đấu thầu Quốc gia</option>
                         <option value="dauthau_asia">DauThau.info</option>
                         <option value="baodauthau">Báo Đấu thầu</option>
@@ -493,6 +490,6 @@
     </div>
 
     <div class="toast-container" id="toast-container" aria-live="polite"></div>
-    <script src="/static/js/app.js?v=2.4.0"></script>
+    <script src="/static/js/app.js?v=2.5.0"></script>
 </body>
 </html>

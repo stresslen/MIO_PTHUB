@@ -1,6 +1,6 @@
 # ==============================================================================
 # AI Lead Intelligence & Crawler - Full Target Sources Configuration
-# Danh sách 10 nguồn dữ liệu Chuyển đổi số, AI & Đấu thầu tại Việt Nam
+# Danh sách nguồn dữ liệu Chuyển đổi số, AI, LinkedIn & Đấu thầu tại Việt Nam
 # ==============================================================================
 
 sources:
@@ -112,3 +112,13 @@ sources:
       - "https://hanoi.gov.vn"
     rate_limit_delay: 1.0
     timeout: 30
+
+  - id: linkedin_apify
+    name: "LinkedIn Posts (Apify)"
+    description: "Tìm bài đăng LinkedIn theo keyword bằng HarvestAPI, không dùng cookie"
+    enabled: true
+    adapter: "app.crawlers.linkedin_apify.LinkedInApifyAdapter"
+    seed_urls:
+      - "https://www.linkedin.com/search/results/content/"
+    rate_limit_delay: 0
+    timeout: 9000

@@ -10,9 +10,16 @@ import time
 from typing import Any
 
 from app.config import settings
-from app.pipeline.normalize import normalize_phone_numbers
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_phone(value: Any) -> str:
+    """Import lazily so Google Sheets scripts do not trigger a pipeline import cycle."""
+    from app.pipeline.normalize import normalize_phone_numbers as normalize
+
+    return normalize(value)
+
 
 LEAD_HEADERS = [
     "id", "source", "source_url", "title", "published_at", "crawled_at",
@@ -180,7 +187,7 @@ class GoogleSheetsService:
     def _lead_row(self, lead: Any) -> list[Any]:
         return [
             self._cell_value(
-                normalize_phone_numbers(getattr(lead, name, None))
+                _normalize_phone(getattr(lead, name, None))
                 if name == "contact_phone"
                 else getattr(lead, name, None)
             )
@@ -310,7 +317,7 @@ class GoogleSheetsService:
                     elif field in {"budget_value", "relevance"}:
                         values[field] = float(value)
                     elif field == "contact_phone":
-                        values[field] = normalize_phone_numbers(value)
+                        values[field] = _normalize_phone(value)
                     else:
                         values[field] = value
                 if not values.get("id"):
@@ -406,7 +413,7 @@ class GoogleSheetsService:
                 for field in ("full_name", "raw_title", "role_group", "email", "profile_url",
                               "source_url", "evidence_text", "decision_reason"):
                     setattr(item, field, record.get(field) or None)
-                item.phone = normalize_phone_numbers(record.get("phone"))
+                item.phone = _normalize_phone(record.get("phone"))
                 try:
                     item.decision_score = int(float(record["decision_score"])) if record.get("decision_score") not in (None, "") else None
                 except (TypeError, ValueError):

@@ -114,7 +114,7 @@ def test_sources_api():
     resp = client.get("/api/sources")
     assert resp.status_code == 200
     sources = resp.json()
-    assert len(sources) == 10
+    assert len(sources) == 11
     assert all(source["base_url"].startswith("https://") for source in sources)
     assert all("total_leads_count" in source for source in sources)
 

@@ -56,7 +56,7 @@ def test_source_bootstrap_moves_all_yaml_urls_to_google_sheets_cache():
     }
 
     assert result["source"] == "google_sheets"
-    assert result["total"] == 10
+    assert result["total"] == 11
     assert stored_urls == expected_urls
     assert all(row["adapter_mode"] == "specialized" for row in sheets.rows)
 

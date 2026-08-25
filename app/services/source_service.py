@@ -190,6 +190,13 @@ class SourceService:
             return self.snapshot()
         try:
             self.sheets.seed_source_rows(self._rows)
+            existing_ids = {
+                str(row.get("id") or "").strip()
+                for row in self.sheets.get_source_rows()
+            }
+            for seed in self._rows:
+                if seed["id"] not in existing_ids:
+                    self.sheets.upsert_source_row(seed)
             return self.refresh()
         except Exception as exc:
             with self._lock:

@@ -5,7 +5,7 @@ from app.crawlers.base import RawDocument
 
 def test_adapter_registry():
     adapters = get_all_adapters()
-    assert len(adapters) == 10
+    assert len(adapters) == 11
     assert "muasamcong" in adapters
     assert "dauthau_asia" in adapters
     assert "baodauthau" in adapters
@@ -16,6 +16,7 @@ def test_adapter_registry():
     assert "vietnamnet" in adapters
     assert "vnexpress" in adapters
     assert "hanoi_gov" in adapters
+    assert "linkedin_apify" in adapters
 
 
 

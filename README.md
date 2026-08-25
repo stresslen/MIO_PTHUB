@@ -139,7 +139,7 @@ Setup một lần:
 ```env
 GOOGLE_SHEETS_SPREADSHEET_ID=17Glsl0gB7e0YKWAmxPdDUSDysGaeujudmN21Gts0GFw
 GOOGLE_SERVICE_ACCOUNT_JSON=<toàn bộ JSON trên một dòng hoặc base64 của JSON>
-GOOGLE_SHEETS_LEADS_WORKSHEET=gid:0
+GOOGLE_SHEETS_LEADS_WORKSHEET=Leads
 GOOGLE_SHEETS_SETTINGS_WORKSHEET=Settings
 GOOGLE_SHEETS_KEYWORDS_WORKSHEET=Keywords
 GOOGLE_SHEETS_SOURCES_WORKSHEET=Sources
@@ -153,11 +153,24 @@ GOOGLE_SHEETS_TENDERS_WORKSHEET=Tenders
 GOOGLE_SHEETS_INTERACTIONS_WORKSHEET=Interactions
 ```
 
-Backend ghi lead trực tiếp vào tab `gid=0`, đồng thời tự tạo worksheet `Settings`, `Keywords`, `Sources`, `Organizations`, `Contacts`, `Organization_Evidence`, `Projects`, `News`, `Jobs`, `Tenders`, `Interactions` và header khi kết nối lần đầu. Lần đầu mở từng trình chỉnh prompt, backend tự tạo hai key **gemini_scoring_prompt** và **gemini_sales_prompt** trong **Settings**; mỗi phần được cập nhật và áp dụng độc lập cho các lượt xử lý tiếp theo. `configs/keywords.yaml` chỉ seed dữ liệu khi tab `Keywords` còn trống; sau đó pipeline đọc keyword từ cache đồng bộ với Google Sheets. Để chuyển dữ liệu lead hiện có ngay, chạy `.venv/bin/python -m scripts.migrate_to_google_sheets`. Kiểm tra trạng thái an toàn tại `GET /api/storage/status`; endpoint này không bao giờ trả credential.
+Backend ghi lead trực tiếp vào tab `Leads`, đồng thời tự tạo worksheet `Settings`, `Keywords`, `Sources`, `Organizations`, `Contacts`, `Organization_Evidence`, `Projects`, `News`, `Jobs`, `Tenders`, `Interactions` và header khi kết nối lần đầu. Lần đầu mở từng trình chỉnh prompt, backend tự tạo hai key **gemini_scoring_prompt** và **gemini_sales_prompt** trong **Settings**; mỗi phần được cập nhật và áp dụng độc lập cho các lượt xử lý tiếp theo. `configs/keywords.yaml` chỉ seed dữ liệu khi tab `Keywords` còn trống; sau đó pipeline đọc keyword từ cache đồng bộ với Google Sheets. Để chuyển dữ liệu lead hiện có ngay, chạy `.venv/bin/python -m scripts.migrate_to_google_sheets`. Kiểm tra trạng thái an toàn tại `GET /api/storage/status`; endpoint này không bao giờ trả credential.
 
-Toàn bộ 10 nguồn và 19 seed URL được lưu trong worksheet `Sources`; `configs/sources.yaml` chỉ seed khi worksheet trống. Nút **Thêm URL** lưu website mới trước khi kiểm tra. Nguồn không crawl được vẫn nằm trong Sheet với trạng thái `NEEDS_ADAPTER` và thông báo cần cập nhật sau.
+Toàn bộ nguồn và seed URL được lưu trong worksheet `Sources`; `configs/sources.yaml` chỉ bổ sung các nguồn hệ thống còn thiếu. Nút **Thêm URL** lưu website mới trước khi kiểm tra. Nguồn không crawl được vẫn nằm trong Sheet với trạng thái `NEEDS_ADAPTER` và thông báo cần cập nhật sau.
 
 Trên trang **Nguồn dữ liệu**, nút **Từ khóa** cho phép nhập TXT/CSV, chuỗi phân cách bằng `,` hoặc `;`, và danh sách xuống dòng. Keyword mới được ghi thẳng vào Sheet, chống trùng không phân biệt chữ hoa/thường và dùng ngay sau khi đồng bộ. Chỉ lead đã qua AI xử lý hợp lệ mới được upsert vào worksheet Leads.
+
+### LinkedIn qua Apify
+
+Nguồn **LinkedIn Posts (Apify)** dùng Actor `harvestapi/linkedin-post-search`. Mỗi lần lịch hằng ngày chạy, Actor tìm tối đa 1.000 bài cho **mỗi keyword Search trực tiếp đang bật** trong worksheet `Keywords`. Khoảng ngày vẫn theo cấu hình chung 1 ngày, 1 tuần hoặc 1 tháng; bình luận và reaction không được crawl.
+
+```env
+APIFY_API_TOKEN=<token backend>
+APIFY_LINKEDIN_MAX_POSTS_PER_KEYWORD=1000
+APIFY_LINKEDIN_CONTENT_TYPE=jobs
+APIFY_LINKEDIN_SORT_BY=relevance
+```
+
+Không chạy Actor thử với dữ liệu thật nếu chưa kiểm tra chi phí: số bài tối đa của một phiên bằng `1.000 × số keyword đang bật`. Token chỉ đặt trong backend/Render, không commit vào Git.
 
 ### Cào thủ công và đặt lịch
 
@@ -171,6 +184,7 @@ Trên trang **Nguồn dữ liệu**, nút **Từ khóa** cho phép nhập TXT/CS
 Repo đã có `render.yaml`. Tạo Render Blueprint từ file này và nhập các biến `sync: false` khi được hỏi:
 
 - `XAH_API_KEY`
+- `APIFY_API_TOKEN`
 - `GEMINI_API_KEY` (có thể dùng cùng gateway key hiện tại)
 - `GOOGLE_SERVICE_ACCOUNT_JSON`
 

@@ -130,9 +130,10 @@ def test_frontend_uses_separate_editors_and_cache_busted_javascript():
     assert 'id="sales-prompt-modal"' in html
     assert 'id="btn-open-scoring-prompt"' in html
     assert 'id="btn-open-sales-prompt"' in html
-    assert "/static/js/app.js?v=2.4.0" in html
+    assert "/static/js/app.js?v=2.5.0" in html
     assert "/api/scoring/prompts/" in javascript
     assert "Cơ sở chấm điểm" not in javascript
     assert "Kịch bản tiếp cận đề xuất" in javascript
     assert "createDetailItem('Email', contactEmail)" in javascript
     assert "createDetailItem('Số điện thoại', contactPhone)" in javascript
+    assert "Xem nguồn gốc" in javascript

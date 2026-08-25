@@ -31,6 +31,20 @@ services:
         value: Vietnam
       - key: XAH_API_KEY
         sync: false
+      - key: APIFY_API_TOKEN
+        sync: false
+      - key: APIFY_LINKEDIN_ACTOR_ID
+        value: harvestapi/linkedin-post-search
+      - key: APIFY_LINKEDIN_MAX_POSTS_PER_KEYWORD
+        value: 1000
+      - key: APIFY_LINKEDIN_PROFILE_SCRAPER_MODE
+        value: short
+      - key: APIFY_LINKEDIN_CONTENT_TYPE
+        value: jobs
+      - key: APIFY_LINKEDIN_SORT_BY
+        value: relevance
+      - key: APIFY_LINKEDIN_RUN_TIMEOUT_SECONDS
+        value: 9000
       - key: COMPANY_ENRICHMENT_ENABLED
         value: true
       - key: COMPANY_ENRICHMENT_MODE
@@ -52,7 +66,7 @@ services:
       - key: GOOGLE_SHEETS_SPREADSHEET_ID
         value: 17Glsl0gB7e0YKWAmxPdDUSDysGaeujudmN21Gts0GFw
       - key: GOOGLE_SHEETS_LEADS_WORKSHEET
-        value: gid:0
+        value: Leads
       - key: GOOGLE_SHEETS_SETTINGS_WORKSHEET
         value: Settings
       - key: GOOGLE_SHEETS_KEYWORDS_WORKSHEET

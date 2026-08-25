@@ -58,6 +58,15 @@ class Settings(BaseSettings):
     xah_language: str = "Vietnam"
     xah_timeout_seconds: int = 60
 
+    # Apify LinkedIn Post Search; token stays on the backend.
+    apify_api_token: str | None = None
+    apify_linkedin_actor_id: str = "harvestapi/linkedin-post-search"
+    apify_linkedin_max_posts_per_keyword: int = 1000
+    apify_linkedin_profile_scraper_mode: str = "short"
+    apify_linkedin_content_type: str = "jobs"
+    apify_linkedin_sort_by: str = "relevance"
+    apify_linkedin_run_timeout_seconds: int = 9000
+
     # Round-two organization enrichment: crawl a verified round-one URL when
     # available; otherwise Gemini creates keywords and XAH returns sourced web
     # content directly. XAH also fills evidence gaps after a direct crawl.

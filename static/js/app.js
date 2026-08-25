@@ -649,10 +649,22 @@ async function openLeadModal(lead) {
     const strategyHeading = document.createElement('div');
     strategyHeading.className = 'strategy-heading-row';
     strategyHeading.appendChild(createHeading('Kịch bản tiếp cận đề xuất'));
+    const strategyMeta = document.createElement('div');
+    strategyMeta.className = 'strategy-meta';
     const strategyAction = document.createElement('span');
     strategyAction.className = 'strategy-action';
     strategyAction.textContent = 'Kênh Gemini đề xuất: ' + action;
-    strategyHeading.appendChild(strategyAction);
+    strategyMeta.appendChild(strategyAction);
+    if (lead.source_url) {
+        const sourceLink = document.createElement('a');
+        sourceLink.className = 'btn btn-quiet btn-xs source-origin-link';
+        sourceLink.href = lead.source_url;
+        sourceLink.target = '_blank';
+        sourceLink.rel = 'noopener noreferrer';
+        sourceLink.textContent = 'Xem nguồn gốc';
+        strategyMeta.appendChild(sourceLink);
+    }
+    strategyHeading.appendChild(strategyMeta);
     strategy.appendChild(strategyHeading);
     const strategyBox = document.createElement('div');
     strategyBox.className = 'strategy-box';
@@ -1139,7 +1151,7 @@ async function executeCrawl() {
     elements.btnStartCrawl.disabled = true;
     elements.btnCancelCrawl.disabled = true;
     elements.crawlProgressBox.classList.remove('hidden');
-    elements.crawlProgressText.textContent = `Đang thu thập từ ${sourceId || '10 nguồn'} · ${timeframe}...`;
+    elements.crawlProgressText.textContent = `Đang thu thập từ ${sourceId || 'các nguồn đang bật'} · ${timeframe}...`;
 
     try {
         const payload = {

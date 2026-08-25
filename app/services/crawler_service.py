@@ -174,9 +174,10 @@ class CrawlerService:
                         logger.info(f"[{source_id}] Duplicate skipped: '{parsed.title[:35]}...'")
                         continue
 
-                    # 5. User-added websites send every valid HTML page to AI.
-                    if getattr(adapter, "is_generic", False):
-                        is_rel, matched_kws, matched_cats = True, [], ["Website tùy chỉnh"]
+                    # 5. Custom sites crawl every page; provider keyword feeds were already filtered upstream.
+                    if getattr(adapter, "is_generic", False) or getattr(adapter, "is_keyword_feed", False):
+                        category = "Nguồn tìm theo từ khóa" if getattr(adapter, "is_keyword_feed", False) else "Website tùy chỉnh"
+                        is_rel, matched_kws, matched_cats = True, [], [category]
                     else:
                         is_rel, matched_kws, matched_cats = prefilter_keywords(
                             parsed.title, parsed.raw_content
@@ -502,7 +503,7 @@ class CrawlerService:
                 db.commit()
                 source_service.record_status(source_id, "FAILED", disc_err)
 
-        # 2. Round-Robin Batch Execution Loop (Interleaved across all 10 sources)
+        # 2. Round-Robin Batch Execution Loop (interleaved across enabled sources)
         round_num = 1
         stop_all = False
 
@@ -552,9 +553,10 @@ class CrawlerService:
                             logger.info(f"[{source_id}] Duplicate skipped: '{parsed.title[:35]}...'")
                             continue
 
-                        # Custom sites bypass keyword filtering: every HTML page goes to AI.
-                        if getattr(adapter, "is_generic", False):
-                            is_rel, matched_kws, matched_cats = True, [], ["Website tùy chỉnh"]
+                        # Custom sites crawl every page; provider keyword feeds were already filtered upstream.
+                        if getattr(adapter, "is_generic", False) or getattr(adapter, "is_keyword_feed", False):
+                            category = "Nguồn tìm theo từ khóa" if getattr(adapter, "is_keyword_feed", False) else "Website tùy chỉnh"
+                            is_rel, matched_kws, matched_cats = True, [], [category]
                         else:
                             is_rel, matched_kws, matched_cats = prefilter_keywords(
                                 parsed.title, parsed.raw_content
