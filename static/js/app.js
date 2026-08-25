@@ -25,6 +25,8 @@ const state = {
     isLoading: false,
     isSavingKeywords: false,
     isSavingSources: false,
+    linkedinMaxPostsPerKeyword: 1000,
+    isSavingLinkedInConfig: false,
     defaultPrompts: { scoring: '', sales: '' },
     savingPromptType: null
 };
@@ -655,15 +657,6 @@ async function openLeadModal(lead) {
     strategyAction.className = 'strategy-action';
     strategyAction.textContent = 'Kênh Gemini đề xuất: ' + action;
     strategyMeta.appendChild(strategyAction);
-    if (lead.source_url) {
-        const sourceLink = document.createElement('a');
-        sourceLink.className = 'btn btn-quiet btn-xs source-origin-link';
-        sourceLink.href = lead.source_url;
-        sourceLink.target = '_blank';
-        sourceLink.rel = 'noopener noreferrer';
-        sourceLink.textContent = 'Xem nguồn gốc';
-        strategyMeta.appendChild(sourceLink);
-    }
     strategyHeading.appendChild(strategyMeta);
     strategy.appendChild(strategyHeading);
     const strategyBox = document.createElement('div');
@@ -772,6 +765,26 @@ async function openLeadModal(lead) {
         }
         modalBody.appendChild(profileSection);
     }
+    if (lead.source_url) {
+        const sourceFooter = document.createElement('section');
+        sourceFooter.className = 'detail-source-footer';
+        const sourceCopy = document.createElement('div');
+        sourceCopy.className = 'detail-source-copy';
+        const sourceTitle = document.createElement('strong');
+        sourceTitle.textContent = 'Dữ liệu gốc của cơ hội';
+        const sourceHint = document.createElement('span');
+        sourceHint.textContent = 'Mở bài viết đã được hệ thống thu thập để đối chiếu.';
+        sourceCopy.append(sourceTitle, sourceHint);
+        const sourceLink = document.createElement('a');
+        sourceLink.className = 'btn btn-source-origin';
+        sourceLink.href = lead.source_url;
+        sourceLink.target = '_blank';
+        sourceLink.rel = 'noopener noreferrer';
+        sourceLink.textContent = 'Xem nguồn gốc';
+        sourceFooter.append(sourceCopy, sourceLink);
+        modalBody.appendChild(sourceFooter);
+    }
+
     elements.leadModal.classList.remove('hidden');
 }
 
@@ -784,6 +797,15 @@ async function loadSources() {
         const res = await fetch('/api/sources');
         if (!res.ok) throw new Error('Không thể tải thông tin nguồn crawler');
         state.sources = await res.json();
+        try {
+            const configResponse = await fetch('/api/sources/linkedin/config');
+            if (configResponse.ok) {
+                const config = await configResponse.json();
+                state.linkedinMaxPostsPerKeyword = config.max_posts_per_keyword || 1000;
+            }
+        } catch (_) {
+            state.linkedinMaxPostsPerKeyword = state.linkedinMaxPostsPerKeyword || 1000;
+        }
         renderSourcesGrid();
         syncCrawlSourceOptions();
         if (elements.sourceCountKicker) {
@@ -810,6 +832,42 @@ function syncCrawlSourceOptions() {
     });
     if ([...elements.crawlSourceSelect.options].some(option => option.value === selected && !option.disabled)) {
         elements.crawlSourceSelect.value = selected;
+    }
+}
+
+async function saveLinkedInPostLimit(input, button, status) {
+    const value = Number(input.value);
+    if (!Number.isInteger(value) || value < 1 || value > 1000) {
+        status.textContent = 'Nhập số nguyên từ 1 đến 1.000.';
+        status.dataset.type = 'error';
+        input.focus();
+        return;
+    }
+    state.isSavingLinkedInConfig = true;
+    input.disabled = true;
+    button.disabled = true;
+    status.textContent = 'Đang lưu vào Google Sheets…';
+    status.dataset.type = '';
+    try {
+        const response = await fetch('/api/sources/linkedin/config', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ max_posts_per_keyword: value })
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.detail || 'Không thể lưu giới hạn LinkedIn');
+        state.linkedinMaxPostsPerKeyword = data.max_posts_per_keyword;
+        input.value = data.max_posts_per_keyword;
+        status.textContent = 'Đã lưu · áp dụng cho crawl tay và lịch hằng ngày.';
+        status.dataset.type = 'success';
+        showToast('Đã cập nhật số bài LinkedIn mỗi keyword.', 'success');
+    } catch (error) {
+        status.textContent = error.message;
+        status.dataset.type = 'error';
+    } finally {
+        state.isSavingLinkedInConfig = false;
+        input.disabled = false;
+        button.disabled = false;
     }
 }
 
@@ -862,6 +920,53 @@ function renderSourcesGrid() {
             meta.appendChild(errorNote);
         }
         card.appendChild(meta);
+
+        if (src.id === 'linkedin_apify') {
+            card.classList.add('source-card-linkedin');
+            const configRow = document.createElement('div');
+            configRow.className = 'source-runtime-config';
+            const configCopy = document.createElement('div');
+            configCopy.className = 'source-runtime-copy';
+            const configLabel = document.createElement('label');
+            configLabel.htmlFor = 'linkedin-post-limit';
+            configLabel.textContent = 'Bài viết / keyword';
+            const configHint = document.createElement('span');
+            configHint.textContent = 'Tối đa 1.000 bài cho mỗi từ khóa mỗi lượt chạy';
+            configCopy.append(configLabel, configHint);
+
+            const configControls = document.createElement('div');
+            configControls.className = 'source-runtime-controls';
+            const configInput = document.createElement('input');
+            configInput.id = 'linkedin-post-limit';
+            configInput.className = 'source-limit-input';
+            configInput.type = 'number';
+            configInput.min = '1';
+            configInput.max = '1000';
+            configInput.step = '50';
+            configInput.inputMode = 'numeric';
+            configInput.value = String(state.linkedinMaxPostsPerKeyword || 1000);
+            configInput.setAttribute('aria-label', 'Số bài LinkedIn mỗi keyword');
+            const configButton = document.createElement('button');
+            configButton.className = 'btn btn-sm btn-save-source-config';
+            configButton.type = 'button';
+            configButton.textContent = 'Lưu';
+            configControls.append(configInput, configButton);
+
+            const configStatus = document.createElement('p');
+            configStatus.className = 'source-runtime-status';
+            configStatus.setAttribute('aria-live', 'polite');
+            configButton.addEventListener('click', () => {
+                saveLinkedInPostLimit(configInput, configButton, configStatus);
+            });
+            configInput.addEventListener('keydown', event => {
+                if (event.key === 'Enter') {
+                    event.preventDefault();
+                    saveLinkedInPostLimit(configInput, configButton, configStatus);
+                }
+            });
+            configRow.append(configCopy, configControls, configStatus);
+            card.appendChild(configRow);
+        }
 
         // Action Button
         const btnRow = document.createElement('div');

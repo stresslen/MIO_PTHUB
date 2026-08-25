@@ -10,6 +10,7 @@ from app.config import settings
 from app.crawlers.base import ParsedItem, RawDocument, SourceAdapter
 from app.pipeline.normalize import normalize_unicode, parse_datetime, utc_now
 from app.services.keyword_service import keyword_service
+from app.services.linkedin_settings_service import linkedin_settings_service
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,7 @@ class LinkedInApifyAdapter(SourceAdapter):
         # Apify already searched using the enabled discovery keywords.
         # Valid results go straight to Gemini instead of the article pre-filter.
         self.is_keyword_feed = True
+        self.max_posts_per_keyword = settings.apify_linkedin_max_posts_per_keyword
 
     @staticmethod
     def _value(item: dict[str, Any], *keys: str) -> Any:
@@ -133,7 +135,7 @@ class LinkedInApifyAdapter(SourceAdapter):
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "searchQueries": keywords,
-            "maxPosts": settings.apify_linkedin_max_posts_per_keyword,
+            "maxPosts": self.max_posts_per_keyword,
             "profileScraperMode": settings.apify_linkedin_profile_scraper_mode,
             "startPage": 1,
             "scrapeReactions": False,
@@ -184,7 +186,7 @@ class LinkedInApifyAdapter(SourceAdapter):
             raise RuntimeError("Apify Actor không có default dataset")
 
         self._last_run_id = str(run_id or "")
-        total_limit = settings.apify_linkedin_max_posts_per_keyword * max(
+        total_limit = self.max_posts_per_keyword * max(
             1, len(run_input.get("searchQueries") or [])
         )
         return list(
@@ -211,12 +213,14 @@ class LinkedInApifyAdapter(SourceAdapter):
                 "Không có keyword bật Search trực tiếp trong worksheet Keywords"
             )
 
+        linkedin_config = linkedin_settings_service.get_config(refresh=True)
+        self.max_posts_per_keyword = linkedin_config["max_posts_per_keyword"]
         run_input = self._actor_input(keywords, since)
         logger.info(
             "[%s] Starting Apify actor for %s keywords, max %s posts/query",
             self.source_id,
             len(keywords),
-            settings.apify_linkedin_max_posts_per_keyword,
+            self.max_posts_per_keyword,
         )
         items = await asyncio.to_thread(self._run_actor, run_input)
 

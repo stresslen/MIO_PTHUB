@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&amp;family=Manrope:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/css/style.css?v=2.5.0">
+    <link rel="stylesheet" href="/static/css/style.css?v=2.6.0">
 </head>
 <body>
     <div class="app-shell">
@@ -44,14 +44,6 @@
                         <p class="subtitle">Theo dõi nhu cầu đầu tư số từ các tổ chức và cơ quan tại Việt Nam.</p>
                     </div>
                     <div class="header-actions">
-                        <button class="btn btn-quiet" id="btn-open-scoring-prompt" type="button">
-                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M4 17h16M18 7h2M4 12h3m4 0h9"/><circle cx="16" cy="7" r="2"/><circle cx="9" cy="12" r="2"/></svg>
-                            Chấm điểm
-                        </button>
-                        <button class="btn btn-quiet" id="btn-open-sales-prompt" type="button">
-                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h14v11H9l-4 3V5Z"/><path d="M8 9h8M8 12h5"/></svg>
-                            Kịch bản Sales
-                        </button>
                         <button class="btn btn-quiet" id="btn-refresh" type="button">
                             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg>
                             Làm mới
@@ -165,6 +157,14 @@
                         <h1>Nguồn dữ liệu</h1>
                     </div>
                     <div class="header-actions">
+                        <button class="btn btn-quiet btn-config-ai" id="btn-open-scoring-prompt" type="button">
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M4 17h16M18 7h2M4 12h3m4 0h9"/><circle cx="16" cy="7" r="2"/><circle cx="9" cy="12" r="2"/></svg>
+                            Chấm điểm
+                        </button>
+                        <button class="btn btn-quiet btn-config-ai" id="btn-open-sales-prompt" type="button">
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h14v11H9l-4 3V5Z"/><path d="M8 9h8M8 12h5"/></svg>
+                            Kịch bản Sales
+                        </button>
                         <button class="btn btn-quiet" id="btn-refresh-sources" type="button">
                             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg>
                             Làm mới
@@ -490,6 +490,6 @@
     </div>
 
     <div class="toast-container" id="toast-container" aria-live="polite"></div>
-    <script src="/static/js/app.js?v=2.5.0"></script>
+    <script src="/static/js/app.js?v=2.6.0"></script>
 </body>
 </html>

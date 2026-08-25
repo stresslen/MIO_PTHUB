@@ -4,6 +4,7 @@ import asyncio
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -11,8 +12,13 @@ from app.database import get_db
 from app.models.lead import Lead
 from app.models.source import SourceImportRequest, SourceInfo, CrawlRun
 from app.services.source_service import source_service
+from app.services.linkedin_settings_service import linkedin_settings_service
 
 router = APIRouter(prefix="/sources", tags=["Sources"])
+
+
+class LinkedInConfigUpdate(BaseModel):
+    max_posts_per_keyword: int = Field(ge=1, le=1000)
 
 
 @router.get("", response_model=List[SourceInfo])
@@ -51,6 +57,21 @@ def get_sources(db: Session = Depends(get_db)):
             hot_leads_count=hot_leads,
         ))
     return results
+
+
+@router.get("/linkedin/config")
+def get_linkedin_config():
+    return linkedin_settings_service.get_config(refresh=True)
+
+
+@router.put("/linkedin/config")
+def update_linkedin_config(payload: LinkedInConfigUpdate):
+    try:
+        return linkedin_settings_service.update(payload.max_posts_per_keyword)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @router.post("/import")
