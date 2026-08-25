@@ -22,7 +22,7 @@ MIO/
 ├── configs/
 │   ├── sources.yaml         # Dữ liệu bootstrap lần đầu cho worksheet Sources
 │   ├── keywords.yaml        # Dữ liệu bootstrap lần đầu cho worksheet Keywords
-│   └── scoring.yaml         # Trọng số chấm điểm & ngưỡng phân loại hành động
+│   └── scoring.yaml         # Cấu hình cũ, không còn quyết định kết quả scoring
 ├── data/
 │   ├── raw/                 # Lưu trữ raw snapshot (HTML/JSON) phục vụ audit & replay
 │   └── golden/              # Golden dataset phục vụ regression testing
@@ -55,29 +55,20 @@ MIO/
 - **Chống trùng lặp (Deduplication)**: Fingerprint băm SHA-256 xác định duy nhất từng bài đăng / gói thầu (`canonical_url + published_date + normalized_title`).
 - **Trích xuất thực thể AI (AI Extractor)**: Trích xuất có cấu trúc: Tên đơn vị, loại hình tổ chức (Government/Enterprise), tóm tắt nhu cầu (1-3 câu), ngân sách, địa bàn, người liên hệ, email, số điện thoại, hạn nộp hồ sơ, minh chứng trích dẫn (`evidence`). AI extraction và scoring là bắt buộc; phản hồi lỗi/không hợp lệ khiến mục đó bị bỏ qua thay vì nhận dữ liệu hoặc điểm giả.
 
-### 3. Bộ Chấm Điểm Lead Linh Hoạt (Scoring Engine)
-Tách biệt hoàn toàn trong `configs/scoring.yaml`, Sales có thể chỉnh trọng số mà không sửa code:
-- `+25 điểm`: Có dự án/gói thầu cụ thể liên quan AI/CĐS.
-- `+20 điểm`: Ngân sách lớn (>= 3 tỷ VNĐ).
-- `+5 điểm thưởng`: Ngân sách đặc biệt lớn (>= 5 tỷ VNĐ).
-- `+10 điểm`: Địa bàn chiến lược (Hà Nội, TP.HCM, Đà Nẵng, Quảng Ninh...).
-- `+15 điểm`: Trùng khớp năng lực AI lõi (OCR, Computer Vision, Voice AI, LLM).
-- `+10 điểm`: Có email / số điện thoại liên hệ công khai.
-- `+5 điểm`: Tin tức mới xuất bản trong vòng 3 ngày.
-- `+10 điểm`: Còn >= 5 ngày trước hạn đóng thầu.
-- `-15 điểm`: Chỉ là tin chính sách chung, chưa có nhu cầu mua sắm cụ thể.
-- `-30 điểm`: Đã quá hạn tiếp cận.
+### 3. Chấm điểm và tạo kịch bản Sales bằng Gemini
 
-**Phân luồng hành động:**
-- 🔴 `90 - 100 điểm` ➔ **CALL** (Hot Lead - Ưu tiên gọi điện tiếp cận ngay).
-- 🔵 `80 - 89 điểm` ➔ **EMAIL** (Qualified - Chuẩn bị thư chào giải pháp).
-- ⚪ `0 - 79 điểm` ➔ **NURTURE** (Marketing nuôi dưỡng & theo dõi thêm).
+- Gemini chịu trách nhiệm toàn bộ **total_score**, **recommended_action** (CALL, EMAIL, NURTURE) và **sales_strategy_suggestion**; backend chỉ kiểm tra schema, giới hạn điểm 0–100 và từ chối phản hồi không hợp lệ.
+- Không có rule-based/OpenAI fallback. Gemini lỗi, thiếu key hoặc trả JSON sai thì mục dữ liệu chưa hoàn thiện không được lưu thành lead.
+- Prompt nghiệp vụ được lưu tại key **gemini_scoring_sales_prompt** trong worksheet **Settings**.
+- Trên dashboard, nút **Chấm điểm & Sales** cho phép xem, sửa, nạp gợi ý mặc định và lưu prompt mà không cần sửa code.
+- Backend luôn nối dữ liệu cơ hội, minh chứng và JSON contract bắt buộc vào prompt người dùng để hạn chế hallucination.
+- Prompt mặc định yêu cầu kịch bản gồm đối tượng, kênh, mục tiêu, mở đầu, thông điệp giá trị, 3–5 câu hỏi khám phá, CTA và các fact cần tránh dùng khi chưa có bằng chứng.
 
 ### 4. Giao Diện Web Dashboard Hiện Đại
 - Thiết kế theo chuẩn quốc tế: Trực quan, tinh tế, responsive.
 - Thẻ chỉ số KPI thời gian thực: Hot Leads, Qualified Leads, Nurture Leads, Tổng số cơ hội, Tổng ngân sách dự án.
 - Bộ lọc đa chiều: Tìm kiếm tức thì, lọc theo Hành động (CALL/EMAIL/NURTURE), lọc theo Nguồn, sắp xếp theo Điểm/Ngày/Ngân sách.
-- Drawer chi tiết Lead: Xem toàn bộ minh chứng trích xuất từ văn bản gốc và bảng chi tiết từng lý do cộng/trừ điểm.
+- Chi tiết Lead: email/SĐT nằm cùng thông tin đơn vị và ngân sách; kịch bản tiếp cận cùng minh chứng được trình bày theo từng khối dễ dùng cho Sales. Giao diện không hiển thị cơ sở cộng/trừ điểm.
 - Trình điều khiển Crawler: Nút bấm chạy crawl live ngay trên web với thanh tiến trình trực quan.
 - Xuất dữ liệu: Xuất báo cáo CSV chuẩn UTF-8-BOM tương thích hoàn hảo Microsoft Excel.
 
@@ -162,7 +153,7 @@ GOOGLE_SHEETS_TENDERS_WORKSHEET=Tenders
 GOOGLE_SHEETS_INTERACTIONS_WORKSHEET=Interactions
 ```
 
-Backend ghi lead trực tiếp vào tab `gid=0`, đồng thời tự tạo worksheet `Settings`, `Keywords`, `Sources`, `Organizations`, `Contacts`, `Organization_Evidence`, `Projects`, `News`, `Jobs`, `Tenders`, `Interactions` và header khi kết nối lần đầu. `configs/keywords.yaml` chỉ seed dữ liệu khi tab `Keywords` còn trống; sau đó pipeline đọc keyword từ cache đồng bộ với Google Sheets. Để chuyển dữ liệu lead hiện có ngay, chạy `.venv/bin/python -m scripts.migrate_to_google_sheets`. Kiểm tra trạng thái an toàn tại `GET /api/storage/status`; endpoint này không bao giờ trả credential.
+Backend ghi lead trực tiếp vào tab `gid=0`, đồng thời tự tạo worksheet `Settings`, `Keywords`, `Sources`, `Organizations`, `Contacts`, `Organization_Evidence`, `Projects`, `News`, `Jobs`, `Tenders`, `Interactions` và header khi kết nối lần đầu. Lần đầu mở trình chỉnh prompt, backend tự tạo key **gemini_scoring_sales_prompt** trong **Settings**; mọi lần lưu sau cập nhật trực tiếp cùng key và áp dụng cho các lượt chấm điểm tiếp theo. `configs/keywords.yaml` chỉ seed dữ liệu khi tab `Keywords` còn trống; sau đó pipeline đọc keyword từ cache đồng bộ với Google Sheets. Để chuyển dữ liệu lead hiện có ngay, chạy `.venv/bin/python -m scripts.migrate_to_google_sheets`. Kiểm tra trạng thái an toàn tại `GET /api/storage/status`; endpoint này không bao giờ trả credential.
 
 Toàn bộ 10 nguồn và 19 seed URL được lưu trong worksheet `Sources`; `configs/sources.yaml` chỉ seed khi worksheet trống. Nút **Thêm URL** lưu website mới trước khi kiểm tra. Nguồn không crawl được vẫn nằm trong Sheet với trạng thái `NEEDS_ADAPTER` và thông báo cần cập nhật sau.
 

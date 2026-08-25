@@ -75,5 +75,23 @@ def test_ai_response_controls_score_and_action():
     })
 
     assert result.total_score == 95
-    assert result.recommended_action == "CALL"
+    assert result.recommended_action == "NURTURE"
     assert result.evaluated_by.startswith("ai_")
+
+
+def test_invalid_gemini_action_is_rejected():
+    engine = AIScoringEngine()
+    with pytest.raises(ValueError, match="recommended_action"):
+        engine._parse_ai_response({
+            "total_score": 85,
+            "recommended_action": "VISIT",
+            "score_reasons": ["Có nhu cầu"],
+            "sales_strategy_suggestion": "Liên hệ.",
+        })
+
+
+def test_non_gemini_provider_is_rejected(monkeypatch):
+    engine = AIScoringEngine()
+    monkeypatch.setattr(settings, "ai_provider", "openai")
+    with pytest.raises(AIAuthenticationError, match="chỉ hỗ trợ AI_PROVIDER=gemini"):
+        _evaluate(engine)

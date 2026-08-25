@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&amp;family=Manrope:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/css/style.css?v=2.2.0">
+    <link rel="stylesheet" href="/static/css/style.css?v=2.3.0">
 </head>
 <body>
     <div class="app-shell">
@@ -33,16 +33,6 @@
                 </a>
             </nav>
 
-            <div class="sidebar-footer">
-                <div class="service-state">
-                    <span class="status-dot online"></span>
-                    <div>
-                        <strong>Hệ thống trực tuyến</strong>
-                        <small>Gemini + XAH Search</small>
-                    </div>
-                </div>
-                <p>Dữ liệu được tổng hợp từ nguồn công khai và lưu trên Google Sheets.</p>
-            </div>
         </aside>
 
         <main class="main-content">
@@ -54,6 +44,10 @@
                         <p class="subtitle">Theo dõi nhu cầu đầu tư số từ các tổ chức và cơ quan tại Việt Nam.</p>
                     </div>
                     <div class="header-actions">
+                        <button class="btn btn-quiet" id="btn-open-scoring-prompt" type="button">
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M4 17h16M18 7h2M4 12h3m4 0h9"/><circle cx="16" cy="7" r="2"/><circle cx="9" cy="12" r="2"/></svg>
+                            Chấm điểm &amp; Sales
+                        </button>
                         <button class="btn btn-quiet" id="btn-refresh" type="button">
                             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg>
                             Làm mới
@@ -249,6 +243,36 @@
                 <button class="btn-close" id="btn-close-modal" type="button" aria-label="Đóng">×</button>
             </div>
             <div class="modal-body" id="modal-body"></div>
+        </div>
+    </div>
+
+    <div class="modal-overlay hidden" id="scoring-prompt-modal" role="dialog" aria-modal="true" aria-labelledby="scoring-prompt-title">
+        <div class="modal-card modal-prompt">
+            <div class="modal-header">
+                <div>
+                    <h2 id="scoring-prompt-title">Chấm điểm và kịch bản Sales</h2>
+                    <p class="modal-header-note">Cấu hình được lưu trong worksheet Settings</p>
+                </div>
+                <button class="btn-close" id="btn-close-scoring-prompt" type="button" aria-label="Đóng">×</button>
+            </div>
+            <form id="scoring-prompt-form">
+                <div class="modal-body prompt-editor-body">
+                    <p class="modal-desc">Điều chỉnh tiêu chí đánh giá và cách viết kịch bản tiếp cận. Hệ thống tự nối dữ liệu cơ hội, minh chứng và định dạng JSON bắt buộc trước khi gửi Gemini.</p>
+                    <div class="prompt-editor-heading">
+                        <label for="scoring-prompt-input">Chỉ dẫn nghiệp vụ cho Gemini</label>
+                        <span id="scoring-prompt-count">0 ký tự</span>
+                    </div>
+                    <textarea id="scoring-prompt-input" class="prompt-textarea" rows="18" maxlength="30000" spellcheck="true" required></textarea>
+                    <p class="prompt-form-status" id="scoring-prompt-status" aria-live="assertive"></p>
+                </div>
+                <div class="modal-footer prompt-footer">
+                    <button class="btn btn-quiet" id="btn-default-scoring-prompt" type="button">Nạp lại gợi ý mặc định</button>
+                    <div>
+                        <button class="btn btn-quiet" id="btn-cancel-scoring-prompt" type="button">Đóng</button>
+                        <button class="btn btn-primary" id="btn-save-scoring-prompt" type="submit">Lưu cấu hình</button>
+                    </div>
+                </div>
+            </form>
         </div>
     </div>
 

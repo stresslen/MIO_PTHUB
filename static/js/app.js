@@ -24,7 +24,9 @@ const state = {
     keywords: [],
     isLoading: false,
     isSavingKeywords: false,
-    isSavingSources: false
+    isSavingSources: false,
+    defaultScoringPrompt: '',
+    isSavingScoringPrompt: false
 };
 
 // ==========================================
@@ -50,6 +52,17 @@ const elements = {
     btnRefresh: document.getElementById('btn-refresh'),
     btnExportCsv: document.getElementById('btn-export-csv'),
 
+    // Gemini scoring and Sales prompt
+    btnOpenScoringPrompt: document.getElementById('btn-open-scoring-prompt'),
+    scoringPromptModal: document.getElementById('scoring-prompt-modal'),
+    scoringPromptForm: document.getElementById('scoring-prompt-form'),
+    btnCloseScoringPrompt: document.getElementById('btn-close-scoring-prompt'),
+    btnCancelScoringPrompt: document.getElementById('btn-cancel-scoring-prompt'),
+    btnDefaultScoringPrompt: document.getElementById('btn-default-scoring-prompt'),
+    btnSaveScoringPrompt: document.getElementById('btn-save-scoring-prompt'),
+    scoringPromptInput: document.getElementById('scoring-prompt-input'),
+    scoringPromptCount: document.getElementById('scoring-prompt-count'),
+    scoringPromptStatus: document.getElementById('scoring-prompt-status'),
 
     // Page 2: Crawlers
     sourcesGrid: document.getElementById('sources-grid'),
@@ -370,223 +383,296 @@ function updatePagination() {
     elements.btnNextPage.disabled = state.leads.page >= state.leads.totalPages;
 }
 
+
+// ==========================================
+// Gemini Scoring & Sales Prompt
+// ==========================================
+function setScoringPromptStatus(message = '', type = '') {
+    if (!elements.scoringPromptStatus) return;
+    elements.scoringPromptStatus.textContent = message;
+    elements.scoringPromptStatus.dataset.type = type;
+}
+
+function updateScoringPromptCount() {
+    if (!elements.scoringPromptInput || !elements.scoringPromptCount) return;
+    const length = elements.scoringPromptInput.value.length;
+    elements.scoringPromptCount.textContent =
+        length.toLocaleString('vi-VN') + ' / 30.000 ký tự';
+    if (elements.btnSaveScoringPrompt) {
+        elements.btnSaveScoringPrompt.disabled =
+            state.isSavingScoringPrompt || length < 100 || length > 30000;
+    }
+}
+
+async function openScoringPromptModal() {
+    if (!elements.scoringPromptModal || !elements.scoringPromptInput) return;
+    elements.scoringPromptModal.classList.remove('hidden');
+    elements.scoringPromptInput.disabled = true;
+    setScoringPromptStatus('Đang tải cấu hình từ Google Sheets…');
+    updateScoringPromptCount();
+    try {
+        const response = await fetch('/api/scoring/prompt');
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.detail || 'Không thể tải prompt chấm điểm');
+        elements.scoringPromptInput.value = data.prompt || '';
+        state.defaultScoringPrompt = data.default_prompt || '';
+        elements.scoringPromptInput.disabled = false;
+        setScoringPromptStatus(
+            data.storage === 'google_sheets'
+                ? 'Cấu hình đang được lưu trong worksheet Settings.'
+                : 'Đang dùng cấu hình mặc định vì Google Sheets chưa sẵn sàng.',
+            data.storage === 'google_sheets' ? 'success' : 'warning'
+        );
+        updateScoringPromptCount();
+        elements.scoringPromptInput.focus();
+    } catch (error) {
+        elements.scoringPromptInput.disabled = true;
+        setScoringPromptStatus(
+            error.message + '. Kiểm tra GOOGLE_SHEETS_SETTINGS_WORKSHEET và quyền service account.',
+            'error'
+        );
+    }
+}
+
+function closeScoringPromptModal() {
+    if (!elements.scoringPromptModal || state.isSavingScoringPrompt) return;
+    elements.scoringPromptModal.classList.add('hidden');
+}
+
+async function saveScoringPrompt(event) {
+    event.preventDefault();
+    const prompt = elements.scoringPromptInput.value.trim();
+    if (prompt.length < 100) {
+        setScoringPromptStatus('Prompt cần ít nhất 100 ký tự.', 'error');
+        updateScoringPromptCount();
+        return;
+    }
+    state.isSavingScoringPrompt = true;
+    elements.scoringPromptInput.disabled = true;
+    setScoringPromptStatus('Đang lưu vào Google Sheets…');
+    updateScoringPromptCount();
+    try {
+        const response = await fetch('/api/scoring/prompt', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ prompt: prompt })
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.detail || 'Không thể lưu prompt');
+        elements.scoringPromptInput.value = data.prompt || prompt;
+        showToast('Đã lưu prompt chấm điểm và kịch bản Sales.', 'success');
+        elements.scoringPromptModal.classList.add('hidden');
+    } catch (error) {
+        setScoringPromptStatus(error.message + '. Nội dung bạn nhập vẫn được giữ nguyên.', 'error');
+    } finally {
+        state.isSavingScoringPrompt = false;
+        elements.scoringPromptInput.disabled = false;
+        updateScoringPromptCount();
+    }
+}
+
+function restoreDefaultScoringPrompt() {
+    if (!state.defaultScoringPrompt || !elements.scoringPromptInput) return;
+    elements.scoringPromptInput.value = state.defaultScoringPrompt;
+    setScoringPromptStatus(
+        'Đã nạp gợi ý mặc định. Nhấn “Lưu cấu hình” để áp dụng.',
+        'warning'
+    );
+    updateScoringPromptCount();
+    elements.scoringPromptInput.focus();
+}
+
 // ==========================================
 // Lead Detail Modal Logic
 // ==========================================
 async function openLeadModal(lead) {
     try {
-        const response = await fetch(`/api/leads/${encodeURIComponent(lead.id)}`);
+        const response = await fetch('/api/leads/' + encodeURIComponent(lead.id));
         if (response.ok) lead = await response.json();
     } catch (error) {
         console.warn('Không tải được Company Profile chi tiết:', error);
     }
-    elements.modalTitle.textContent = lead.title;
-    
-    // Set Action Badge
-    elements.modalActionBadge.className = `badge badge-${lead.recommended_action.toLowerCase()}`;
-    elements.modalActionBadge.textContent = lead.recommended_action;
 
+    const profile = lead.company_profile || null;
+    const contacts = Array.isArray(profile?.contacts) ? profile.contacts : [];
+    const namedContact = contacts.find(contact => contact.full_name) || contacts[0] || {};
+    const emailContact = contacts.find(contact => contact.email) || {};
+    const phoneContact = contacts.find(contact => contact.phone) || {};
+    const contactName = lead.contact_name || namedContact.full_name || '';
+    const contactEmail = lead.contact_email || emailContact.email || '';
+    const contactPhone = lead.contact_phone || phoneContact.phone || '';
+    const action = String(lead.recommended_action || 'NURTURE').toUpperCase();
+
+    elements.modalTitle.textContent = lead.title || 'Chi tiết cơ hội';
+    elements.modalActionBadge.className = 'badge badge-' + action.toLowerCase();
+    elements.modalActionBadge.textContent = action;
     const modalBody = elements.modalBody;
-    while (modalBody.firstChild) modalBody.removeChild(modalBody.firstChild);
+    modalBody.replaceChildren();
 
-    // Section 1: Overview Grid
-    const secOverview = document.createElement('div');
-    secOverview.className = 'detail-section';
-    const hOverview = document.createElement('h4');
-    hOverview.textContent = 'Thông tin đơn vị và ngân sách';
-    secOverview.appendChild(hOverview);
-
-    const grid = document.createElement('div');
-    grid.className = 'detail-grid';
-
-    const addDetailItem = (label, value) => {
+    const createHeading = (text) => {
+        const heading = document.createElement('h4');
+        heading.textContent = text;
+        return heading;
+    };
+    const createDetailItem = (label, value) => {
         const item = document.createElement('div');
         item.className = 'detail-item';
-        const l = document.createElement('span');
-        l.className = 'detail-label';
-        l.textContent = label;
-        const v = document.createElement('span');
-        v.className = 'detail-value';
-        v.textContent = value || 'Chưa cập nhật';
-        item.appendChild(l);
-        item.appendChild(v);
-        grid.appendChild(item);
+        const key = document.createElement('span');
+        key.className = 'detail-label';
+        key.textContent = label;
+        const content = document.createElement('span');
+        content.className = 'detail-value';
+        content.textContent = value || 'Chưa cập nhật';
+        item.append(key, content);
+        return item;
     };
 
-    addDetailItem('Cơ quan / Đơn vị:', lead.organization_name);
-    addDetailItem('Ngân sách dự kiến:', formatCurrency(lead.budget_value) || lead.budget_text || 'Chưa xác định');
-    addDetailItem('Địa bàn triển khai:', lead.location || 'Toàn quốc');
-    addDetailItem('Cổng thông tin nguồn:', formatSourceBadge(lead.source).name);
-    addDetailItem('Ngày xuất bản:', formatDate(lead.published_at));
-    addDetailItem('Hạn nộp hồ sơ / Tiếp cận:', formatDate(lead.deadline));
-    secOverview.appendChild(grid);
-    modalBody.appendChild(secOverview);
+    const overview = document.createElement('section');
+    overview.className = 'detail-section';
+    overview.appendChild(createHeading('Thông tin đơn vị và ngân sách'));
+    const overviewGrid = document.createElement('div');
+    overviewGrid.className = 'detail-grid';
+    overviewGrid.append(
+        createDetailItem('Cơ quan / Đơn vị', lead.organization_name),
+        createDetailItem('Ngân sách dự kiến', formatCurrency(lead.budget_value) || lead.budget_text || 'Chưa xác định'),
+        createDetailItem('Người liên hệ', contactName),
+        createDetailItem('Email', contactEmail),
+        createDetailItem('Số điện thoại', contactPhone),
+        createDetailItem('Địa bàn triển khai', lead.location || 'Toàn quốc'),
+        createDetailItem('Ngày xuất bản', formatDate(lead.published_at)),
+        createDetailItem('Hạn nộp hồ sơ / Tiếp cận', formatDate(lead.deadline))
+    );
+    overview.appendChild(overviewGrid);
+    modalBody.appendChild(overview);
 
-    // Section 2: AI Need Summary
-    const secNeed = document.createElement('div');
-    secNeed.className = 'detail-section';
-    const hNeed = document.createElement('h4');
-    hNeed.textContent = 'Nhu cầu được ghi nhận';
-    secNeed.appendChild(hNeed);
-    const pNeed = document.createElement('p');
-    pNeed.style.lineHeight = '1.6';
-    pNeed.textContent = lead.need_summary || lead.title;
-    secNeed.appendChild(pNeed);
-    modalBody.appendChild(secNeed);
+    const need = document.createElement('section');
+    need.className = 'detail-section';
+    need.appendChild(createHeading('Nhu cầu được ghi nhận'));
+    const needCopy = document.createElement('p');
+    needCopy.className = 'detail-copy';
+    needCopy.textContent = lead.need_summary || lead.title || 'Chưa có mô tả nhu cầu.';
+    need.appendChild(needCopy);
+    modalBody.appendChild(need);
 
-    // Section 3: AI Sales Strategy
-    if (lead.sales_strategy) {
-        const secStrat = document.createElement('div');
-        secStrat.className = 'detail-section';
-        const hStrat = document.createElement('h4');
-        hStrat.textContent = 'Gợi ý hướng tiếp cận';
-        secStrat.appendChild(hStrat);
-        const boxStrat = document.createElement('div');
-        boxStrat.className = 'evidence-box';
-        boxStrat.classList.add('strategy-box');
-        boxStrat.textContent = lead.sales_strategy;
-        secStrat.appendChild(boxStrat);
-        modalBody.appendChild(secStrat);
-    }
+    const strategy = document.createElement('section');
+    strategy.className = 'detail-section';
+    const strategyHeading = document.createElement('div');
+    strategyHeading.className = 'strategy-heading-row';
+    strategyHeading.appendChild(createHeading('Kịch bản tiếp cận đề xuất'));
+    const strategyAction = document.createElement('span');
+    strategyAction.className = 'strategy-action';
+    strategyAction.textContent = 'Kênh Gemini đề xuất: ' + action;
+    strategyHeading.appendChild(strategyAction);
+    strategy.appendChild(strategyHeading);
+    const strategyBox = document.createElement('div');
+    strategyBox.className = 'strategy-box';
+    strategyBox.textContent = lead.sales_strategy ||
+        'Gemini chưa tạo được kịch bản cho cơ hội này. Hãy chạy lại pipeline sau khi kiểm tra cấu hình AI và minh chứng đầu vào.';
+    strategy.appendChild(strategyBox);
+    modalBody.appendChild(strategy);
 
-    // Section 4: Score Reasons Breakdown
-    if (lead.score_reasons && lead.score_reasons.length > 0) {
-        const secReasons = document.createElement('div');
-        secReasons.className = 'detail-section';
-        const hReasons = document.createElement('h4');
-        hReasons.textContent = `Cơ sở chấm điểm · ${lead.score}/100`;
-        secReasons.appendChild(hReasons);
-
-        const rList = document.createElement('div');
-        rList.className = 'score-breakdown-list';
-        lead.score_reasons.forEach(r => {
-            const rItem = document.createElement('div');
-            rItem.className = 'score-breakdown-item';
-            rItem.textContent = r;
-            rList.appendChild(rItem);
+    const evidenceItems = Array.isArray(lead.evidence)
+        ? lead.evidence.filter(item => String(item || '').trim())
+        : [];
+    const evidenceSection = document.createElement('section');
+    evidenceSection.className = 'detail-section';
+    evidenceSection.appendChild(createHeading('Minh chứng từ nội dung thu thập'));
+    if (evidenceItems.length) {
+        const evidenceList = document.createElement('div');
+        evidenceList.className = 'evidence-list';
+        evidenceItems.forEach((evidence, index) => {
+            const row = document.createElement('div');
+            row.className = 'evidence-item';
+            const number = document.createElement('span');
+            number.className = 'evidence-index';
+            number.textContent = String(index + 1).padStart(2, '0');
+            const quote = document.createElement('p');
+            quote.className = 'evidence-quote';
+            quote.textContent = evidence;
+            row.append(number, quote);
+            evidenceList.appendChild(row);
         });
-        secReasons.appendChild(rList);
-        modalBody.appendChild(secReasons);
+        evidenceSection.appendChild(evidenceList);
+    } else {
+        const emptyEvidence = document.createElement('p');
+        emptyEvidence.className = 'detail-empty-note';
+        emptyEvidence.textContent = 'Chưa có đoạn minh chứng đủ rõ để hiển thị.';
+        evidenceSection.appendChild(emptyEvidence);
     }
+    modalBody.appendChild(evidenceSection);
 
-    // Section 5: Evidence
-    if (lead.evidence && lead.evidence.length > 0) {
-        const secEv = document.createElement('div');
-        secEv.className = 'detail-section';
-        const hEv = document.createElement('h4');
-        hEv.textContent = 'Minh chứng và nguồn tham chiếu';
-        secEv.appendChild(hEv);
-        lead.evidence.forEach(ev => {
-            const evBox = document.createElement('div');
-            evBox.className = 'evidence-box';
-            evBox.textContent = `“${ev}”`;
-            secEv.appendChild(evBox);
-        });
-        modalBody.appendChild(secEv);
-    }
-
-    // Company Profile from verified round-two crawl.
-    if (lead.company_profile || lead.enrichment_status) {
-        const profile = lead.company_profile;
-        const secProfile = document.createElement('div');
-        secProfile.className = 'detail-section';
-        const hProfile = document.createElement('h4');
-        hProfile.textContent = 'Hồ sơ tổ chức · Crawl vòng 2';
-        secProfile.appendChild(hProfile);
-
+    if (profile || lead.enrichment_status) {
+        const profileSection = document.createElement('section');
+        profileSection.className = 'detail-section';
+        profileSection.appendChild(createHeading('Hồ sơ tổ chức · Crawl vòng 2'));
         const profileGrid = document.createElement('div');
         profileGrid.className = 'detail-grid';
-        const addProfileItem = (label, value) => {
-            const item = document.createElement('div');
-            item.className = 'detail-item';
-            const key = document.createElement('span');
-            key.className = 'detail-label';
-            key.textContent = label;
-            const text = document.createElement('span');
-            text.className = 'detail-value';
-            text.textContent = value || 'Chưa tìm thấy';
-            item.append(key, text);
-            profileGrid.appendChild(item);
-        };
-        addProfileItem('Trạng thái:', profile?.profile_status || lead.enrichment_status);
-        addProfileItem('Ngành:', profile?.industry);
-        addProfileItem('Quy mô:', profile?.size);
-        addProfileItem('Nhân sự:', profile?.employee_count);
-        addProfileItem('Địa điểm:', Array.isArray(profile?.locations) ? profile.locations.join(', ') : profile?.locations);
-        addProfileItem('Công nghệ công bố:', Array.isArray(profile?.technologies) ? profile.technologies.join(', ') : profile?.technologies);
-        secProfile.appendChild(profileGrid);
+        profileGrid.append(
+            createDetailItem('Trạng thái', profile?.profile_status || lead.enrichment_status),
+            createDetailItem('Ngành', profile?.industry),
+            createDetailItem('Quy mô', profile?.size),
+            createDetailItem('Nhân sự', profile?.employee_count),
+            createDetailItem('Địa điểm', Array.isArray(profile?.locations) ? profile.locations.join(', ') : profile?.locations),
+            createDetailItem('Công nghệ công bố', Array.isArray(profile?.technologies) ? profile.technologies.join(', ') : profile?.technologies)
+        );
+        profileSection.appendChild(profileGrid);
 
-        if (profile?.official_url) {
-            const officialLink = document.createElement('a');
-            officialLink.className = 'btn btn-quiet btn-sm';
-            officialLink.href = profile.official_url;
-            officialLink.target = '_blank';
-            officialLink.rel = 'noopener noreferrer';
-            officialLink.textContent = 'Mở website đã xác minh';
-            secProfile.appendChild(officialLink);
-        }
-        if (profile?.contacts?.length) {
-            const contactTitle = document.createElement('h4');
-            contactTitle.textContent = 'Đầu mối công khai và khả năng quyết định';
-            secProfile.appendChild(contactTitle);
-            profile.contacts.forEach(contact => {
-                const card = document.createElement('div');
-                card.className = 'evidence-box';
-                const headline = [contact.full_name, contact.raw_title].filter(Boolean).join(' · ') || 'Đầu mối công khai';
-                const score = Number.isFinite(contact.decision_score) ? ` · ${contact.decision_score}/100` : '';
-                card.textContent = `${headline}${score}
-${contact.email || ''} ${contact.phone || ''}
-${contact.evidence_text || ''}`.trim();
-                const source = document.createElement('a');
-                source.href = contact.source_url;
-                source.target = '_blank';
-                source.rel = 'noopener noreferrer';
-                source.textContent = 'Xem bằng chứng';
-                card.appendChild(document.createElement('br'));
-                card.appendChild(source);
-                secProfile.appendChild(card);
+        if (contacts.length) {
+            profileSection.appendChild(createHeading('Đầu mối bổ sung từ hồ sơ tổ chức'));
+            const contactList = document.createElement('div');
+            contactList.className = 'profile-contact-list';
+            contacts.forEach(contact => {
+                const card = document.createElement('article');
+                card.className = 'profile-contact-card';
+                const title = document.createElement('div');
+                title.className = 'profile-contact-title';
+                title.textContent = [contact.full_name, contact.raw_title || contact.role_group]
+                    .filter(Boolean).join(' · ') || 'Đầu mối công khai';
+                card.appendChild(title);
+
+                const meta = document.createElement('div');
+                meta.className = 'profile-contact-meta';
+                [
+                    contact.email ? 'Email: ' + contact.email : '',
+                    contact.phone ? 'SĐT: ' + contact.phone : '',
+                    Number.isFinite(contact.decision_score)
+                        ? 'Khả năng quyết định: ' + contact.decision_score + '/100'
+                        : ''
+                ].filter(Boolean).forEach(value => {
+                    const item = document.createElement('span');
+                    item.textContent = value;
+                    meta.appendChild(item);
+                });
+                if (meta.childNodes.length) card.appendChild(meta);
+
+                if (contact.evidence_text || contact.decision_reason) {
+                    const contactEvidence = document.createElement('p');
+                    contactEvidence.className = 'profile-contact-evidence';
+                    contactEvidence.textContent = contact.evidence_text || contact.decision_reason;
+                    card.appendChild(contactEvidence);
+                }
+                contactList.appendChild(card);
             });
+            profileSection.appendChild(contactList);
         }
-        const incomplete = profile?.missing_information || [];
-        if (incomplete.length || lead.enrichment_message) {
+
+        const incomplete = Array.isArray(profile?.missing_information)
+            ? profile.missing_information
+            : [];
+        if (incomplete.length || lead.enrichment_message || profile?.error_message) {
             const note = document.createElement('div');
-            note.className = 'evidence-box';
+            note.className = 'detail-empty-note';
             note.textContent = [
-                incomplete.length ? `Chưa tìm thấy: ${incomplete.join(', ')}` : '',
+                incomplete.length ? 'Chưa tìm thấy: ' + incomplete.join(', ') : '',
                 lead.enrichment_message || profile?.error_message || ''
             ].filter(Boolean).join(' · ');
-            secProfile.appendChild(note);
+            profileSection.appendChild(note);
         }
-        modalBody.appendChild(secProfile);
+        modalBody.appendChild(profileSection);
     }
-
-    // Contact Info & Action Link
-    const secContact = document.createElement('div');
-    secContact.className = 'detail-section';
-    const hContact = document.createElement('h4');
-    hContact.textContent = 'Liên hệ và nguồn gốc';
-    secContact.appendChild(hContact);
-
-    const contactDiv = document.createElement('div');
-    contactDiv.className = 'contact-row';
-
-    const cText = document.createElement('div');
-    cText.textContent = `Email: ${lead.contact_email || 'Chưa rõ'} | SĐT: ${lead.contact_phone || 'Chưa rõ'}`;
-    contactDiv.appendChild(cText);
-
-    const openLinkBtn = document.createElement('a');
-    openLinkBtn.className = 'btn btn-primary btn-sm';
-    openLinkBtn.href = lead.source_url;
-    openLinkBtn.target = '_blank';
-    openLinkBtn.rel = 'noopener noreferrer';
-    openLinkBtn.textContent = 'Mở nguồn gốc';
-    contactDiv.appendChild(openLinkBtn);
-
-    secContact.appendChild(contactDiv);
-    modalBody.appendChild(secContact);
-
     elements.leadModal.classList.remove('hidden');
 }
+
 
 // ==========================================
 // PAGE 2: Crawler Management Logic
@@ -1141,7 +1227,38 @@ function initEvents() {
         if (event.key === 'Escape' && elements.sourceModal && !elements.sourceModal.classList.contains('hidden')) {
             closeSourceModal();
         }
+        if (event.key === 'Escape' && elements.scoringPromptModal && !elements.scoringPromptModal.classList.contains('hidden')) {
+            closeScoringPromptModal();
+        }
     });
+
+    // Scoring prompt events
+    if (elements.btnOpenScoringPrompt) {
+        elements.btnOpenScoringPrompt.addEventListener('click', openScoringPromptModal);
+    }
+    if (elements.btnCloseScoringPrompt) {
+        elements.btnCloseScoringPrompt.addEventListener('click', closeScoringPromptModal);
+    }
+    if (elements.btnCancelScoringPrompt) {
+        elements.btnCancelScoringPrompt.addEventListener('click', closeScoringPromptModal);
+    }
+    if (elements.btnDefaultScoringPrompt) {
+        elements.btnDefaultScoringPrompt.addEventListener('click', restoreDefaultScoringPrompt);
+    }
+    if (elements.scoringPromptForm) {
+        elements.scoringPromptForm.addEventListener('submit', saveScoringPrompt);
+    }
+    if (elements.scoringPromptInput) {
+        elements.scoringPromptInput.addEventListener('input', () => {
+            setScoringPromptStatus('');
+            updateScoringPromptCount();
+        });
+    }
+    if (elements.scoringPromptModal) {
+        elements.scoringPromptModal.addEventListener('click', event => {
+            if (event.target === elements.scoringPromptModal) closeScoringPromptModal();
+        });
+    }
 
     // Scheduler Events
     if (elements.btnConfigureScheduler) elements.btnConfigureScheduler.addEventListener('click', openScheduleModal);

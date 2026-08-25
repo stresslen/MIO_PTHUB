@@ -8,7 +8,7 @@ import requests
 from app.config import settings
 from app.models.scoring_rule import ScoreResult, ScoreBreakdownItem
 from app.pipeline.extract import AIAuthenticationError, AIQuotaOrAPIError
-from app.pipeline.normalize import utc_now
+from app.services.scoring_prompt_service import scoring_prompt_service
 
 logger = logging.getLogger(__name__)
 
@@ -78,22 +78,9 @@ class AIScoringEngine:
                 raise AIQuotaOrAPIError("Gemini scoring không trả về kết quả hợp lệ")
             return result
 
-        if settings.ai_provider == "openai":
-            if not settings.openai_api_key:
-                raise AIAuthenticationError("Chưa cấu hình OPENAI_API_KEY cho AI scoring")
-            try:
-                result = self._evaluate_with_openai(**common)
-            except (AIAuthenticationError, AIQuotaOrAPIError):
-                raise
-            except Exception as exc:
-                raise AIQuotaOrAPIError(
-                    f"OpenAI scoring trả dữ liệu không hợp lệ: {exc}"
-                ) from exc
-            if result is None:
-                raise AIQuotaOrAPIError("OpenAI scoring không trả về kết quả hợp lệ")
-            return result
-
-        raise AIAuthenticationError(f"AI_PROVIDER không được hỗ trợ: {settings.ai_provider}")
+        raise AIAuthenticationError(
+            "Chấm điểm và tạo kịch bản Sales chỉ hỗ trợ AI_PROVIDER=gemini"
+        )
 
     def _evaluate_with_gemini(
         self,
@@ -112,69 +99,19 @@ class AIScoringEngine:
         """
         Invoke Google Gemini API (supports both direct Google AI Studio and OpenAI-compatible proxy endpoints).
         """
-        now_str = utc_now().strftime("%Y-%m-%d")
-        pub_str = published_at.strftime("%Y-%m-%d") if published_at else "Chưa rõ"
-        deadline_str = deadline.strftime("%Y-%m-%d") if deadline else "Chưa rõ"
-        budget_str = f"{budget_value:,.0f} VNĐ" if budget_value else "Chưa xác định"
-
-        prompt = f"""
-Bạn là Chuyên gia Cao cấp về AI Lead Intelligence & B2B/B2G Sales Strategy trong lĩnh vực Chuyển đổi số & AI.
-Nhiệm vụ của bạn là phân tích sâu và chấm điểm khách hàng tiềm năng (0 - 100 điểm) dựa trên các tiêu chí chuẩn mực quốc tế sau:
-
-=== TIÊU CHÍ CHẤM ĐIỂM CHI TIẾT (0 - 100 ĐIỂM) ===
-1. NHU CẦU SỐ HÓA, CHUYỂN ĐỔI SỐ HOẶC ỨNG DỤNG AI (Tối đa +25 điểm):
-   - Chỉ cần đơn vị/cơ quan/doanh nghiệp có nhu cầu, chủ trương, kế hoạch, gói thầu, đề án hoặc dự án liên quan đến: **Số hóa, Chuyển đổi số, Ứng dụng AI, Nâng cấp hệ thống CNTT/Phần mềm, Xây dựng cơ sở dữ liệu/Nền tảng số** là được cộng tối đa +25 điểm (KHÔNG yêu cầu phải nêu chi tiết bài toán hay thuật toán cụ thể).
-2. QUY MÔ NGÂN SÁCH & KHẢ NĂNG CHI TRẢ (Tối đa +25 điểm):
-   - Ngân sách >= 3 tỷ VNĐ (+20 điểm).
-   - Ngân sách >= 5 tỷ VNĐ (+25 điểm).
-   - Ngân sách < 3 tỷ hoặc chưa ghi số tiền nhưng là dự án/đề án cấp Tỉnh/Bộ ngành/Tổng công ty (+10 đến +15 điểm).
-3. ĐỊA BÀN CHIẾN LƯỢC (Tối đa +10 điểm):
-   - Triển khai tại: Hà Nội, TP.HCM, Đà Nẵng, Quảng Ninh, Hải Phòng, Bình Dương, Đồng Nai, Cần Thơ hoặc cơ quan cấp Trung ương (+10 điểm).
-4. KHỚP NĂNG LỰC CÔNG NGHỆ LÕI (Tối đa +15 điểm):
-   - Đơn vị cần giải pháp về: Số hóa hồ sơ/OCR, Chuyển đổi số, Phần mềm nghiệp vụ, Ứng dụng AI (Chatbot, Voice, Camera, LLM, Xử lý dữ liệu) (+15 điểm).
-5. KHẢ NĂNG TIẾP CẬN & LIÊN HỆ (Tối đa +10 điểm):
-   - Có email, số điện thoại hoặc đầu mối liên hệ công khai (+10 điểm).
-6. TÍNH CẤP BÁCH & THỜI HẠN (Tối đa +10 điểm / Phạt -30 điểm nếu quá hạn):
-   - Còn >= 5 ngày trước hạn đóng thầu/hạn tiếp cận (+10 điểm).
-   - Tin đăng mới trong vòng 3 ngày (+5 điểm).
-   - Hạn tiếp cận đã quá hạn (Trừ -30 điểm).
-7. ĐIỂM TRỪ NẾU HOÀN TOÀN KHÔNG LIÊN QUAN CNTT/CĐS (Phạt -20 điểm):
-   - Chỉ phạt điểm khi tin tức hoàn toàn không liên quan đến công nghệ thông tin/chuyển đổi số (ví dụ: xây lắp công trình cầu đường thuần túy, hoạt động thể thao...).
-
-=== QUY TẮC PHÂN LUỒNG HÀNH ĐỘNG ===
-- 90 - 100 điểm: "CALL" (Hot Lead - Ưu tiên gọi điện & tiếp cận trực tiếp ngay lập tức).
-- 80 - 89 điểm: "EMAIL" (Qualified Lead - Chuẩn bị tài liệu & gửi email chào giải pháp chuyên sâu).
-- 0 - 79 điểm: "NURTURE" (Nurturing - Marketing theo dõi, nuôi dưỡng & làm giàu thông tin).
-
-=== THÔNG TIN CƠ HỘI CẦN ĐÁNH GIÁ ===
-- Tiêu đề: {title}
-- Nhu cầu trích xuất: {need_summary or 'Chưa có tóm tắt'}
-- Phân loại lĩnh vực: {', '.join(need_categories)}
-- Ngân sách: {budget_str}
-- Địa bàn: {location or 'Toàn quốc'}
-- Liên hệ: Email: {contact_email or 'Không có'} | SĐT: {contact_phone or 'Không có'}
-- Ngày đăng: {pub_str} | Hạn chót: {deadline_str} | Ngày hiện tại: {now_str}
-- Mức độ phù hợp ban đầu: {relevance}
-- Minh chứng trích xuất: {' | '.join(evidence[:3])}
-
-=== ĐỊNH DẠNG ĐẦU RA JSON BẮT BUỘC ===
-Trả về duy nhất 1 JSON object hợp lệ:
-{{
-  "total_score": <số nguyên từ 0 đến 100>,
-  "recommended_action": "CALL" | "EMAIL" | "NURTURE",
-  "score_reasons": [
-    "+25 Có gói thầu cụ thể về OCR và số hóa hồ sơ",
-    "+20 Ngân sách lớn 4.5 tỷ VNĐ (>= 3 tỷ)",
-    "+10 Địa bàn chiến lược Hà Nội",
-    ...
-  ],
-  "breakdown": [
-    {{"rule_name": "demand_specificity", "points": 25, "reason": "..."}},
-    {{"rule_name": "budget_size", "points": 20, "reason": "..."}}
-  ],
-  "sales_strategy_suggestion": "<1-2 câu gợi ý cho Sales về thông điệp tiếp cận và giải pháp trọng tâm nên chào>"
-}}
-"""
+        prompt = scoring_prompt_service.build_runtime_prompt(
+            title=title,
+            need_summary=need_summary,
+            need_categories=need_categories,
+            budget_value=budget_value,
+            location=location,
+            contact_email=contact_email,
+            contact_phone=contact_phone,
+            deadline=deadline,
+            published_at=published_at,
+            relevance=relevance,
+            evidence=evidence,
+        )
 
         base_url = settings.gemini_base_url or settings.ai_base_url
 
@@ -255,13 +192,9 @@ Trả về duy nhất 1 JSON object hợp lệ:
     def _parse_ai_response(self, parsed: Dict[str, Any]) -> ScoreResult:
         """Helper to sanitize and build ScoreResult from AI output."""
         score = max(0, min(100, int(parsed.get("total_score", 0))))
-        action = parsed.get("recommended_action", "NURTURE")
-        if score >= 90:
-            action = "CALL"
-        elif score >= 80:
-            action = "EMAIL"
-        else:
-            action = "NURTURE"
+        action = str(parsed.get("recommended_action") or "").strip().upper()
+        if action not in {"CALL", "EMAIL", "NURTURE"}:
+            raise ValueError("Gemini trả recommended_action không hợp lệ")
 
         reasons = parsed.get("score_reasons", [])
         breakdown = [
@@ -280,60 +213,6 @@ Trả về duy nhất 1 JSON object hợp lệ:
             breakdown=breakdown,
             sales_strategy_suggestion=parsed.get("sales_strategy_suggestion"),
             evaluated_by=f"ai_{settings.gemini_model}",
-        )
-
-    def _evaluate_with_openai(
-        self,
-        title: str,
-        need_summary: Optional[str],
-        need_categories: List[str],
-        budget_value: Optional[float],
-        location: Optional[str],
-        contact_email: Optional[str],
-        contact_phone: Optional[str],
-        deadline: Optional[datetime.datetime],
-        published_at: Optional[datetime.datetime],
-        relevance: float,
-    ) -> Optional[ScoreResult]:
-        """Fallback to OpenAI API if configured."""
-        from openai import OpenAI
-        client = OpenAI(api_key=settings.openai_api_key)
-        
-        prompt = f"""
-        Chấm điểm Lead B2B/B2G từ 0 đến 100 điểm theo tiêu chí:
-        - Tiêu đề: {title}
-        - Nhu cầu: {need_summary}
-        - Lĩnh vực: {need_categories}
-        - Ngân sách: {budget_value}
-        - Địa bàn: {location}
-        - Contact: Email={contact_email}, Phone={contact_phone}
-        - Deadline: {deadline}
-        
-        Trả về JSON:
-        {{
-          "total_score": 0..100,
-          "recommended_action": "CALL" | "EMAIL" | "NURTURE",
-          "score_reasons": ["+X lý do 1", "+Y lý do 2"],
-          "sales_strategy_suggestion": "Gợi ý tiếp cận"
-        }}
-        """
-        response = client.chat.completions.create(
-            model=settings.openai_model,
-            messages=[{"role": "user", "content": prompt}],
-            response_format={"type": "json_object"},
-            temperature=0.1,
-        )
-        content = response.choices[0].message.content
-        parsed = json.loads(content or "{}")
-        score = max(0, min(100, int(parsed.get("total_score", 0))))
-        action = "CALL" if score >= 90 else ("EMAIL" if score >= 80 else "NURTURE")
-
-        return ScoreResult(
-            total_score=score,
-            recommended_action=action,
-            reasons=parsed.get("score_reasons", []),
-            sales_strategy_suggestion=parsed.get("sales_strategy_suggestion"),
-            evaluated_by="ai_openai",
         )
 
 
