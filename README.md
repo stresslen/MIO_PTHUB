@@ -59,8 +59,8 @@ MIO/
 
 - Gemini chịu trách nhiệm toàn bộ **total_score**, **recommended_action** (CALL, EMAIL, NURTURE) và **sales_strategy_suggestion**; backend chỉ kiểm tra schema, giới hạn điểm 0–100 và từ chối phản hồi không hợp lệ.
 - Không có rule-based/OpenAI fallback. Gemini lỗi, thiếu key hoặc trả JSON sai thì mục dữ liệu chưa hoàn thiện không được lưu thành lead.
-- Prompt nghiệp vụ được lưu tại key **gemini_scoring_sales_prompt** trong worksheet **Settings**.
-- Trên dashboard, nút **Chấm điểm & Sales** cho phép xem, sửa, nạp gợi ý mặc định và lưu prompt mà không cần sửa code.
+- Prompt chấm điểm và prompt kịch bản Sales được lưu riêng tại **gemini_scoring_prompt** và **gemini_sales_prompt** trong worksheet **Settings**.
+- Trên dashboard, hai nút **Thiết lập chấm điểm** và **Thiết lập kịch bản Sales** cho phép chỉnh độc lập mà không cần sửa code.
 - Backend luôn nối dữ liệu cơ hội, minh chứng và JSON contract bắt buộc vào prompt người dùng để hạn chế hallucination.
 - Prompt mặc định yêu cầu kịch bản gồm đối tượng, kênh, mục tiêu, mở đầu, thông điệp giá trị, 3–5 câu hỏi khám phá, CTA và các fact cần tránh dùng khi chưa có bằng chứng.
 
@@ -153,7 +153,7 @@ GOOGLE_SHEETS_TENDERS_WORKSHEET=Tenders
 GOOGLE_SHEETS_INTERACTIONS_WORKSHEET=Interactions
 ```
 
-Backend ghi lead trực tiếp vào tab `gid=0`, đồng thời tự tạo worksheet `Settings`, `Keywords`, `Sources`, `Organizations`, `Contacts`, `Organization_Evidence`, `Projects`, `News`, `Jobs`, `Tenders`, `Interactions` và header khi kết nối lần đầu. Lần đầu mở trình chỉnh prompt, backend tự tạo key **gemini_scoring_sales_prompt** trong **Settings**; mọi lần lưu sau cập nhật trực tiếp cùng key và áp dụng cho các lượt chấm điểm tiếp theo. `configs/keywords.yaml` chỉ seed dữ liệu khi tab `Keywords` còn trống; sau đó pipeline đọc keyword từ cache đồng bộ với Google Sheets. Để chuyển dữ liệu lead hiện có ngay, chạy `.venv/bin/python -m scripts.migrate_to_google_sheets`. Kiểm tra trạng thái an toàn tại `GET /api/storage/status`; endpoint này không bao giờ trả credential.
+Backend ghi lead trực tiếp vào tab `gid=0`, đồng thời tự tạo worksheet `Settings`, `Keywords`, `Sources`, `Organizations`, `Contacts`, `Organization_Evidence`, `Projects`, `News`, `Jobs`, `Tenders`, `Interactions` và header khi kết nối lần đầu. Lần đầu mở từng trình chỉnh prompt, backend tự tạo hai key **gemini_scoring_prompt** và **gemini_sales_prompt** trong **Settings**; mỗi phần được cập nhật và áp dụng độc lập cho các lượt xử lý tiếp theo. `configs/keywords.yaml` chỉ seed dữ liệu khi tab `Keywords` còn trống; sau đó pipeline đọc keyword từ cache đồng bộ với Google Sheets. Để chuyển dữ liệu lead hiện có ngay, chạy `.venv/bin/python -m scripts.migrate_to_google_sheets`. Kiểm tra trạng thái an toàn tại `GET /api/storage/status`; endpoint này không bao giờ trả credential.
 
 Toàn bộ 10 nguồn và 19 seed URL được lưu trong worksheet `Sources`; `configs/sources.yaml` chỉ seed khi worksheet trống. Nút **Thêm URL** lưu website mới trước khi kiểm tra. Nguồn không crawl được vẫn nằm trong Sheet với trạng thái `NEEDS_ADAPTER` và thông báo cần cập nhật sau.
 

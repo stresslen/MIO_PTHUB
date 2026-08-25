@@ -6,7 +6,9 @@ from fastapi.testclient import TestClient
 import app.api.scoring as scoring_api
 from app.main import app
 from app.services.scoring_prompt_service import (
+    DEFAULT_SALES_PROMPT,
     DEFAULT_SCORING_PROMPT,
+    SALES_PROMPT_SETTING_KEY,
     SCORING_PROMPT_SETTING_KEY,
     ScoringPromptService,
 )
@@ -15,41 +17,50 @@ from app.services.scoring_prompt_service import (
 class FakeSheets:
     def __init__(self, configured=True, stored=None):
         self.configured = configured
-        self.stored = stored
+        self.stored = stored or {}
         self.saved = []
         self.last_error = None
 
     def load_setting(self, key):
-        assert key == SCORING_PROMPT_SETTING_KEY
-        return self.stored
+        return self.stored.get(key)
 
     def save_setting(self, key, value):
         self.saved.append((key, value))
-        self.stored = value
+        self.stored[key] = value
         return True
 
 
-def test_default_prompt_is_seeded_in_settings():
+def test_default_prompts_are_seeded_separately_in_settings():
     sheets = FakeSheets()
     service = ScoringPromptService(sheets=sheets)
 
-    config = service.get_config(refresh=True)
+    scoring = service.get_config("scoring", refresh=True)
+    sales = service.get_config("sales", refresh=True)
 
-    assert config["prompt"] == DEFAULT_SCORING_PROMPT
-    assert config["storage"] == "google_sheets"
-    assert sheets.saved[0][0] == SCORING_PROMPT_SETTING_KEY
-    assert sheets.saved[0][1]["prompt"] == DEFAULT_SCORING_PROMPT
+    assert scoring["prompt"] == DEFAULT_SCORING_PROMPT
+    assert scoring["setting_key"] == SCORING_PROMPT_SETTING_KEY
+    assert sales["prompt"] == DEFAULT_SALES_PROMPT
+    assert sales["setting_key"] == SALES_PROMPT_SETTING_KEY
+    assert {item[0] for item in sheets.saved} == {
+        SCORING_PROMPT_SETTING_KEY,
+        SALES_PROMPT_SETTING_KEY,
+    }
 
 
-def test_custom_prompt_is_saved_and_used_in_runtime_prompt():
-    sheets = FakeSheets(stored={"prompt": DEFAULT_SCORING_PROMPT})
+def test_custom_prompts_are_saved_and_used_independently():
+    sheets = FakeSheets()
     service = ScoringPromptService(sheets=sheets)
-    custom = (
-        "Hãy ưu tiên tín hiệu có nhu cầu triển khai rõ ràng và chỉ dùng dữ liệu được cung cấp. "
-        "Viết kịch bản Sales gồm mở đầu, câu hỏi khám phá, thông điệp giá trị và bước tiếp theo."
+    scoring_custom = (
+        "Chấm điểm dựa trên nhu cầu, ý định mua, ngân sách, thời hạn và chất lượng liên hệ. "
+        "Chỉ dùng dữ liệu có minh chứng và tự chọn CALL, EMAIL hoặc NURTURE phù hợp."
+    )
+    sales_custom = (
+        "Viết kịch bản Sales gồm đối tượng, cách mở đầu, thông điệp giá trị, câu hỏi khám phá "
+        "và bước tiếp theo. Không bịa thông tin còn thiếu hoặc khẳng định quá mức."
     )
 
-    config = service.update_prompt(custom)
+    scoring = service.update_prompt("scoring", scoring_custom)
+    sales = service.update_prompt("sales", sales_custom)
     runtime = service.build_runtime_prompt(
         title="Gói thầu OCR",
         need_summary="Số hóa hồ sơ",
@@ -64,44 +75,51 @@ def test_custom_prompt_is_saved_and_used_in_runtime_prompt():
         evidence=["Đơn vị mời thầu hệ thống số hóa hồ sơ."],
     )
 
-    assert config["prompt"] == custom
-    assert sheets.saved[-1][1]["prompt"] == custom
-    assert custom in runtime
+    assert scoring["prompt"] == scoring_custom
+    assert sales["prompt"] == sales_custom
+    assert sheets.stored[SCORING_PROMPT_SETTING_KEY]["prompt"] == scoring_custom
+    assert sheets.stored[SALES_PROMPT_SETTING_KEY]["prompt"] == sales_custom
+    assert scoring_custom in runtime
+    assert sales_custom in runtime
     assert "sales@example.vn" in runtime
-    assert "Đơn vị mời thầu hệ thống số hóa hồ sơ." in runtime
     assert "JSON BẮT BUỘC" in runtime
 
 
-def test_scoring_prompt_api(monkeypatch):
-    expected = {
-        "prompt": DEFAULT_SCORING_PROMPT,
-        "default_prompt": DEFAULT_SCORING_PROMPT,
-        "is_default": True,
-        "storage": "google_sheets",
-    }
-    monkeypatch.setattr(
-        scoring_api.scoring_prompt_service,
-        "get_config",
-        lambda refresh=False: expected,
-    )
-    monkeypatch.setattr(
-        scoring_api.scoring_prompt_service,
-        "update_prompt",
-        lambda prompt: {**expected, "prompt": prompt, "is_default": False},
-    )
+def test_separate_prompt_apis(monkeypatch):
+    def fake_get(prompt_type, refresh=False):
+        default = DEFAULT_SCORING_PROMPT if prompt_type == "scoring" else DEFAULT_SALES_PROMPT
+        key = SCORING_PROMPT_SETTING_KEY if prompt_type == "scoring" else SALES_PROMPT_SETTING_KEY
+        return {
+            "prompt_type": prompt_type,
+            "prompt": default,
+            "default_prompt": default,
+            "is_default": True,
+            "setting_key": key,
+            "storage": "google_sheets",
+        }
+
+    def fake_update(prompt_type, prompt):
+        return {**fake_get(prompt_type), "prompt": prompt, "is_default": False}
+
+    monkeypatch.setattr(scoring_api.scoring_prompt_service, "get_config", fake_get)
+    monkeypatch.setattr(scoring_api.scoring_prompt_service, "update_prompt", fake_update)
     client = TestClient(app)
 
-    response = client.get("/api/scoring/prompt")
-    assert response.status_code == 200
-    assert response.json()["storage"] == "google_sheets"
+    scoring_response = client.get("/api/scoring/prompts/scoring")
+    sales_response = client.get("/api/scoring/prompts/sales")
+    assert scoring_response.status_code == 200
+    assert scoring_response.json()["setting_key"] == SCORING_PROMPT_SETTING_KEY
+    assert sales_response.status_code == 200
+    assert sales_response.json()["setting_key"] == SALES_PROMPT_SETTING_KEY
 
     custom = "A" * 120
-    response = client.put("/api/scoring/prompt", json={"prompt": custom})
+    response = client.put("/api/scoring/prompts/sales", json={"prompt": custom})
     assert response.status_code == 200
+    assert response.json()["prompt_type"] == "sales"
     assert response.json()["prompt"] == custom
 
 
-def test_frontend_removes_score_basis_and_exposes_prompt_editor():
+def test_frontend_uses_separate_editors_and_cache_busted_javascript():
     root = Path(__file__).resolve().parents[1]
     html = (root / "static/index.html").read_text(encoding="utf-8")
     javascript = (root / "static/js/app.js").read_text(encoding="utf-8")
@@ -109,6 +127,11 @@ def test_frontend_removes_score_basis_and_exposes_prompt_editor():
     assert "Gemini + XAH Search" not in html
     assert "Dữ liệu được tổng hợp từ nguồn công khai" not in html
     assert 'id="scoring-prompt-modal"' in html
+    assert 'id="sales-prompt-modal"' in html
+    assert 'id="btn-open-scoring-prompt"' in html
+    assert 'id="btn-open-sales-prompt"' in html
+    assert "/static/js/app.js?v=2.4.0" in html
+    assert "/api/scoring/prompts/" in javascript
     assert "Cơ sở chấm điểm" not in javascript
     assert "Kịch bản tiếp cận đề xuất" in javascript
     assert "createDetailItem('Email', contactEmail)" in javascript

@@ -66,6 +66,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .header-title h1 { margin: 0; font-size: clamp(30px, 3vw, 42px); line-height: 1.08; font-weight: 600; letter-spacing: -.045em; }
 .subtitle { max-width: 680px; margin: 10px 0 0; color: var(--ink-soft); font-size: 14px; }
 .header-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.prompt-shortcuts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+.prompt-shortcuts .btn { color: var(--brand-dark); background: transparent; border-color: var(--line-dark); }
+.prompt-shortcuts .btn:hover:not(:disabled) { background: var(--brand-soft); border-color: #b8d0ca; }
 
 .btn { min-height: 40px; border: 1px solid transparent; border-radius: 8px; padding: 9px 14px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; background: transparent; color: var(--ink); font-weight: 650; font-size: 12px; line-height: 1; text-decoration: none; cursor: pointer; transition: transform .12s ease, background .15s ease, border-color .15s ease, color .15s ease; }
 .btn svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
@@ -322,4 +325,5 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
     .source-fields { grid-template-columns: 1fr; gap: 0; }
     .nav-item span { display: none; }.nav-item { width: 38px; justify-content: center; }
     .header-title h1 { font-size: 30px; }.header-actions { display: grid; grid-template-columns: 1fr 1fr; }.header-actions .btn-primary { grid-column: 1 / -1; }
+    .prompt-shortcuts { display: grid; grid-template-columns: 1fr; }.prompt-shortcuts .btn { width: 100%; }
 }

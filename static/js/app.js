@@ -25,8 +25,8 @@ const state = {
     isLoading: false,
     isSavingKeywords: false,
     isSavingSources: false,
-    defaultScoringPrompt: '',
-    isSavingScoringPrompt: false
+    defaultPrompts: { scoring: '', sales: '' },
+    savingPromptType: null
 };
 
 // ==========================================
@@ -52,7 +52,7 @@ const elements = {
     btnRefresh: document.getElementById('btn-refresh'),
     btnExportCsv: document.getElementById('btn-export-csv'),
 
-    // Gemini scoring and Sales prompt
+    // Separate Gemini scoring and Sales prompts
     btnOpenScoringPrompt: document.getElementById('btn-open-scoring-prompt'),
     scoringPromptModal: document.getElementById('scoring-prompt-modal'),
     scoringPromptForm: document.getElementById('scoring-prompt-form'),
@@ -63,6 +63,16 @@ const elements = {
     scoringPromptInput: document.getElementById('scoring-prompt-input'),
     scoringPromptCount: document.getElementById('scoring-prompt-count'),
     scoringPromptStatus: document.getElementById('scoring-prompt-status'),
+    btnOpenSalesPrompt: document.getElementById('btn-open-sales-prompt'),
+    salesPromptModal: document.getElementById('sales-prompt-modal'),
+    salesPromptForm: document.getElementById('sales-prompt-form'),
+    btnCloseSalesPrompt: document.getElementById('btn-close-sales-prompt'),
+    btnCancelSalesPrompt: document.getElementById('btn-cancel-sales-prompt'),
+    btnDefaultSalesPrompt: document.getElementById('btn-default-sales-prompt'),
+    btnSaveSalesPrompt: document.getElementById('btn-save-sales-prompt'),
+    salesPromptInput: document.getElementById('sales-prompt-input'),
+    salesPromptCount: document.getElementById('sales-prompt-count'),
+    salesPromptStatus: document.getElementById('sales-prompt-status'),
 
     // Page 2: Crawlers
     sourcesGrid: document.getElementById('sources-grid'),
@@ -385,102 +395,182 @@ function updatePagination() {
 
 
 // ==========================================
-// Gemini Scoring & Sales Prompt
+// Separate Gemini Scoring & Sales Prompts
 // ==========================================
-function setScoringPromptStatus(message = '', type = '') {
-    if (!elements.scoringPromptStatus) return;
-    elements.scoringPromptStatus.textContent = message;
-    elements.scoringPromptStatus.dataset.type = type;
+function getPromptEditor(promptType) {
+    if (promptType === 'scoring') {
+        return {
+            modal: elements.scoringPromptModal,
+            form: elements.scoringPromptForm,
+            openButton: elements.btnOpenScoringPrompt,
+            closeButton: elements.btnCloseScoringPrompt,
+            cancelButton: elements.btnCancelScoringPrompt,
+            defaultButton: elements.btnDefaultScoringPrompt,
+            saveButton: elements.btnSaveScoringPrompt,
+            input: elements.scoringPromptInput,
+            count: elements.scoringPromptCount,
+            status: elements.scoringPromptStatus,
+            label: 'prompt chấm điểm'
+        };
+    }
+    return {
+        modal: elements.salesPromptModal,
+        form: elements.salesPromptForm,
+        openButton: elements.btnOpenSalesPrompt,
+        closeButton: elements.btnCloseSalesPrompt,
+        cancelButton: elements.btnCancelSalesPrompt,
+        defaultButton: elements.btnDefaultSalesPrompt,
+        saveButton: elements.btnSaveSalesPrompt,
+        input: elements.salesPromptInput,
+        count: elements.salesPromptCount,
+        status: elements.salesPromptStatus,
+        label: 'prompt kịch bản Sales'
+    };
 }
 
-function updateScoringPromptCount() {
-    if (!elements.scoringPromptInput || !elements.scoringPromptCount) return;
-    const length = elements.scoringPromptInput.value.length;
-    elements.scoringPromptCount.textContent =
-        length.toLocaleString('vi-VN') + ' / 30.000 ký tự';
-    if (elements.btnSaveScoringPrompt) {
-        elements.btnSaveScoringPrompt.disabled =
-            state.isSavingScoringPrompt || length < 100 || length > 30000;
+function setPromptStatus(promptType, message = '', type = '') {
+    const editor = getPromptEditor(promptType);
+    if (!editor.status) return;
+    editor.status.textContent = message;
+    editor.status.dataset.type = type;
+}
+
+function updatePromptCount(promptType) {
+    const editor = getPromptEditor(promptType);
+    if (!editor.input || !editor.count) return;
+    const length = editor.input.value.length;
+    editor.count.textContent = length.toLocaleString('vi-VN') + ' / 30.000 ký tự';
+    if (editor.saveButton) {
+        editor.saveButton.disabled =
+            state.savingPromptType !== null || length < 100 || length > 30000;
     }
 }
 
-async function openScoringPromptModal() {
-    if (!elements.scoringPromptModal || !elements.scoringPromptInput) return;
-    elements.scoringPromptModal.classList.remove('hidden');
-    elements.scoringPromptInput.disabled = true;
-    setScoringPromptStatus('Đang tải cấu hình từ Google Sheets…');
-    updateScoringPromptCount();
+async function openPromptModal(promptType) {
+    const editor = getPromptEditor(promptType);
+    if (!editor.modal || !editor.input) return;
+    editor.modal.classList.remove('hidden');
+    editor.input.disabled = true;
+    setPromptStatus(promptType, 'Đang tải cấu hình từ Google Sheets…');
+    updatePromptCount(promptType);
+
     try {
-        const response = await fetch('/api/scoring/prompt');
+        const response = await fetch('/api/scoring/prompts/' + promptType, {
+            headers: { 'Cache-Control': 'no-cache' }
+        });
         const data = await response.json();
-        if (!response.ok) throw new Error(data.detail || 'Không thể tải prompt chấm điểm');
-        elements.scoringPromptInput.value = data.prompt || '';
-        state.defaultScoringPrompt = data.default_prompt || '';
-        elements.scoringPromptInput.disabled = false;
-        setScoringPromptStatus(
+        if (!response.ok) throw new Error(data.detail || 'Không thể tải ' + editor.label);
+        editor.input.value = data.prompt || '';
+        state.defaultPrompts[promptType] = data.default_prompt || '';
+        editor.input.disabled = false;
+        setPromptStatus(
+            promptType,
             data.storage === 'google_sheets'
-                ? 'Cấu hình đang được lưu trong worksheet Settings.'
-                : 'Đang dùng cấu hình mặc định vì Google Sheets chưa sẵn sàng.',
+                ? 'Đang lưu tại ' + data.setting_key + ' trong worksheet Settings.'
+                : 'Đang dùng mặc định vì Google Sheets chưa sẵn sàng.',
             data.storage === 'google_sheets' ? 'success' : 'warning'
         );
-        updateScoringPromptCount();
-        elements.scoringPromptInput.focus();
+        updatePromptCount(promptType);
+        editor.input.focus();
     } catch (error) {
-        elements.scoringPromptInput.disabled = true;
-        setScoringPromptStatus(
-            error.message + '. Kiểm tra GOOGLE_SHEETS_SETTINGS_WORKSHEET và quyền service account.',
+        editor.input.disabled = true;
+        setPromptStatus(
+            promptType,
+            error.message + '. Kiểm tra worksheet Settings và quyền service account.',
             'error'
         );
     }
 }
 
-function closeScoringPromptModal() {
-    if (!elements.scoringPromptModal || state.isSavingScoringPrompt) return;
-    elements.scoringPromptModal.classList.add('hidden');
+function closePromptModal(promptType) {
+    const editor = getPromptEditor(promptType);
+    if (!editor.modal || state.savingPromptType === promptType) return;
+    editor.modal.classList.add('hidden');
 }
 
-async function saveScoringPrompt(event) {
+async function savePrompt(promptType, event) {
     event.preventDefault();
-    const prompt = elements.scoringPromptInput.value.trim();
+    const editor = getPromptEditor(promptType);
+    const prompt = editor.input.value.trim();
     if (prompt.length < 100) {
-        setScoringPromptStatus('Prompt cần ít nhất 100 ký tự.', 'error');
-        updateScoringPromptCount();
+        setPromptStatus(promptType, 'Prompt cần ít nhất 100 ký tự.', 'error');
+        updatePromptCount(promptType);
         return;
     }
-    state.isSavingScoringPrompt = true;
-    elements.scoringPromptInput.disabled = true;
-    setScoringPromptStatus('Đang lưu vào Google Sheets…');
-    updateScoringPromptCount();
+
+    state.savingPromptType = promptType;
+    editor.input.disabled = true;
+    setPromptStatus(promptType, 'Đang lưu vào Google Sheets…');
+    updatePromptCount(promptType);
+
     try {
-        const response = await fetch('/api/scoring/prompt', {
+        const response = await fetch('/api/scoring/prompts/' + promptType, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ prompt: prompt })
         });
         const data = await response.json();
-        if (!response.ok) throw new Error(data.detail || 'Không thể lưu prompt');
-        elements.scoringPromptInput.value = data.prompt || prompt;
-        showToast('Đã lưu prompt chấm điểm và kịch bản Sales.', 'success');
-        elements.scoringPromptModal.classList.add('hidden');
+        if (!response.ok) throw new Error(data.detail || 'Không thể lưu ' + editor.label);
+        editor.input.value = data.prompt || prompt;
+        showToast('Đã lưu ' + editor.label + '.', 'success');
+        editor.modal.classList.add('hidden');
     } catch (error) {
-        setScoringPromptStatus(error.message + '. Nội dung bạn nhập vẫn được giữ nguyên.', 'error');
+        setPromptStatus(
+            promptType,
+            error.message + '. Nội dung bạn nhập vẫn được giữ nguyên.',
+            'error'
+        );
     } finally {
-        state.isSavingScoringPrompt = false;
-        elements.scoringPromptInput.disabled = false;
-        updateScoringPromptCount();
+        state.savingPromptType = null;
+        editor.input.disabled = false;
+        updatePromptCount('scoring');
+        updatePromptCount('sales');
     }
 }
 
-function restoreDefaultScoringPrompt() {
-    if (!state.defaultScoringPrompt || !elements.scoringPromptInput) return;
-    elements.scoringPromptInput.value = state.defaultScoringPrompt;
-    setScoringPromptStatus(
-        'Đã nạp gợi ý mặc định. Nhấn “Lưu cấu hình” để áp dụng.',
+function restoreDefaultPrompt(promptType) {
+    const editor = getPromptEditor(promptType);
+    if (!state.defaultPrompts[promptType] || !editor.input) return;
+    editor.input.value = state.defaultPrompts[promptType];
+    setPromptStatus(
+        promptType,
+        'Đã nạp gợi ý mặc định. Nhấn nút Lưu để áp dụng.',
         'warning'
     );
-    updateScoringPromptCount();
-    elements.scoringPromptInput.focus();
+    updatePromptCount(promptType);
+    editor.input.focus();
 }
+
+function bindPromptEditor(promptType) {
+    const editor = getPromptEditor(promptType);
+    if (editor.openButton) {
+        editor.openButton.addEventListener('click', () => openPromptModal(promptType));
+    }
+    if (editor.closeButton) {
+        editor.closeButton.addEventListener('click', () => closePromptModal(promptType));
+    }
+    if (editor.cancelButton) {
+        editor.cancelButton.addEventListener('click', () => closePromptModal(promptType));
+    }
+    if (editor.defaultButton) {
+        editor.defaultButton.addEventListener('click', () => restoreDefaultPrompt(promptType));
+    }
+    if (editor.form) {
+        editor.form.addEventListener('submit', event => savePrompt(promptType, event));
+    }
+    if (editor.input) {
+        editor.input.addEventListener('input', () => {
+            setPromptStatus(promptType);
+            updatePromptCount(promptType);
+        });
+    }
+    if (editor.modal) {
+        editor.modal.addEventListener('click', event => {
+            if (event.target === editor.modal) closePromptModal(promptType);
+        });
+    }
+}
+
 
 // ==========================================
 // Lead Detail Modal Logic
@@ -1228,37 +1318,16 @@ function initEvents() {
             closeSourceModal();
         }
         if (event.key === 'Escape' && elements.scoringPromptModal && !elements.scoringPromptModal.classList.contains('hidden')) {
-            closeScoringPromptModal();
+            closePromptModal('scoring');
+        }
+        if (event.key === 'Escape' && elements.salesPromptModal && !elements.salesPromptModal.classList.contains('hidden')) {
+            closePromptModal('sales');
         }
     });
 
-    // Scoring prompt events
-    if (elements.btnOpenScoringPrompt) {
-        elements.btnOpenScoringPrompt.addEventListener('click', openScoringPromptModal);
-    }
-    if (elements.btnCloseScoringPrompt) {
-        elements.btnCloseScoringPrompt.addEventListener('click', closeScoringPromptModal);
-    }
-    if (elements.btnCancelScoringPrompt) {
-        elements.btnCancelScoringPrompt.addEventListener('click', closeScoringPromptModal);
-    }
-    if (elements.btnDefaultScoringPrompt) {
-        elements.btnDefaultScoringPrompt.addEventListener('click', restoreDefaultScoringPrompt);
-    }
-    if (elements.scoringPromptForm) {
-        elements.scoringPromptForm.addEventListener('submit', saveScoringPrompt);
-    }
-    if (elements.scoringPromptInput) {
-        elements.scoringPromptInput.addEventListener('input', () => {
-            setScoringPromptStatus('');
-            updateScoringPromptCount();
-        });
-    }
-    if (elements.scoringPromptModal) {
-        elements.scoringPromptModal.addEventListener('click', event => {
-            if (event.target === elements.scoringPromptModal) closeScoringPromptModal();
-        });
-    }
+    // Independent prompt editors
+    bindPromptEditor('scoring');
+    bindPromptEditor('sales');
 
     // Scheduler Events
     if (elements.btnConfigureScheduler) elements.btnConfigureScheduler.addEventListener('click', openScheduleModal);

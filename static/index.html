@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&amp;family=Manrope:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/css/style.css?v=2.3.0">
+    <link rel="stylesheet" href="/static/css/style.css?v=2.4.0">
 </head>
 <body>
     <div class="app-shell">
@@ -42,12 +42,18 @@
                         <span class="eyebrow">Opportunity desk</span>
                         <h1>Cơ hội thị trường</h1>
                         <p class="subtitle">Theo dõi nhu cầu đầu tư số từ các tổ chức và cơ quan tại Việt Nam.</p>
+                        <div class="prompt-shortcuts" aria-label="Cấu hình Gemini">
+                            <button class="btn btn-quiet btn-sm" id="btn-open-scoring-prompt" type="button">
+                                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M4 17h16M18 7h2M4 12h3m4 0h9"/><circle cx="16" cy="7" r="2"/><circle cx="9" cy="12" r="2"/></svg>
+                                Thiết lập chấm điểm
+                            </button>
+                            <button class="btn btn-quiet btn-sm" id="btn-open-sales-prompt" type="button">
+                                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h14v11H9l-4 3V5Z"/><path d="M8 9h8M8 12h5"/></svg>
+                                Thiết lập kịch bản Sales
+                            </button>
+                        </div>
                     </div>
                     <div class="header-actions">
-                        <button class="btn btn-quiet" id="btn-open-scoring-prompt" type="button">
-                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M4 17h16M18 7h2M4 12h3m4 0h9"/><circle cx="16" cy="7" r="2"/><circle cx="9" cy="12" r="2"/></svg>
-                            Chấm điểm &amp; Sales
-                        </button>
                         <button class="btn btn-quiet" id="btn-refresh" type="button">
                             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg>
                             Làm mới
@@ -250,26 +256,56 @@
         <div class="modal-card modal-prompt">
             <div class="modal-header">
                 <div>
-                    <h2 id="scoring-prompt-title">Chấm điểm và kịch bản Sales</h2>
-                    <p class="modal-header-note">Cấu hình được lưu trong worksheet Settings</p>
+                    <h2 id="scoring-prompt-title">Thiết lập chấm điểm</h2>
+                    <p class="modal-header-note">Lưu riêng tại gemini_scoring_prompt trong worksheet Settings</p>
                 </div>
                 <button class="btn-close" id="btn-close-scoring-prompt" type="button" aria-label="Đóng">×</button>
             </div>
             <form id="scoring-prompt-form">
                 <div class="modal-body prompt-editor-body">
-                    <p class="modal-desc">Điều chỉnh tiêu chí đánh giá và cách viết kịch bản tiếp cận. Hệ thống tự nối dữ liệu cơ hội, minh chứng và định dạng JSON bắt buộc trước khi gửi Gemini.</p>
+                    <p class="modal-desc">Quy định cách Gemini tính điểm, giải thích điểm và chọn CALL, EMAIL hoặc NURTURE. Phần kịch bản Sales không được chỉnh tại đây.</p>
                     <div class="prompt-editor-heading">
-                        <label for="scoring-prompt-input">Chỉ dẫn nghiệp vụ cho Gemini</label>
+                        <label for="scoring-prompt-input">Prompt chấm điểm</label>
                         <span id="scoring-prompt-count">0 ký tự</span>
                     </div>
                     <textarea id="scoring-prompt-input" class="prompt-textarea" rows="18" maxlength="30000" spellcheck="true" required></textarea>
                     <p class="prompt-form-status" id="scoring-prompt-status" aria-live="assertive"></p>
                 </div>
                 <div class="modal-footer prompt-footer">
-                    <button class="btn btn-quiet" id="btn-default-scoring-prompt" type="button">Nạp lại gợi ý mặc định</button>
+                    <button class="btn btn-quiet" id="btn-default-scoring-prompt" type="button">Nạp gợi ý mặc định</button>
                     <div>
                         <button class="btn btn-quiet" id="btn-cancel-scoring-prompt" type="button">Đóng</button>
-                        <button class="btn btn-primary" id="btn-save-scoring-prompt" type="submit">Lưu cấu hình</button>
+                        <button class="btn btn-primary" id="btn-save-scoring-prompt" type="submit">Lưu chấm điểm</button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div class="modal-overlay hidden" id="sales-prompt-modal" role="dialog" aria-modal="true" aria-labelledby="sales-prompt-title">
+        <div class="modal-card modal-prompt">
+            <div class="modal-header">
+                <div>
+                    <h2 id="sales-prompt-title">Thiết lập kịch bản Sales</h2>
+                    <p class="modal-header-note">Lưu riêng tại gemini_sales_prompt trong worksheet Settings</p>
+                </div>
+                <button class="btn-close" id="btn-close-sales-prompt" type="button" aria-label="Đóng">×</button>
+            </div>
+            <form id="sales-prompt-form">
+                <div class="modal-body prompt-editor-body">
+                    <p class="modal-desc">Quy định đối tượng, cách mở đầu, câu hỏi khám phá, thông điệp và bước tiếp theo. Phần này không thay đổi tiêu chí chấm điểm.</p>
+                    <div class="prompt-editor-heading">
+                        <label for="sales-prompt-input">Prompt kịch bản Sales</label>
+                        <span id="sales-prompt-count">0 ký tự</span>
+                    </div>
+                    <textarea id="sales-prompt-input" class="prompt-textarea" rows="18" maxlength="30000" spellcheck="true" required></textarea>
+                    <p class="prompt-form-status" id="sales-prompt-status" aria-live="assertive"></p>
+                </div>
+                <div class="modal-footer prompt-footer">
+                    <button class="btn btn-quiet" id="btn-default-sales-prompt" type="button">Nạp gợi ý mặc định</button>
+                    <div>
+                        <button class="btn btn-quiet" id="btn-cancel-sales-prompt" type="button">Đóng</button>
+                        <button class="btn btn-primary" id="btn-save-sales-prompt" type="submit">Lưu kịch bản Sales</button>
                     </div>
                 </div>
             </form>
@@ -457,6 +493,6 @@
     </div>
 
     <div class="toast-container" id="toast-container" aria-live="polite"></div>
-    <script src="/static/js/app.js?v=2.2.0"></script>
+    <script src="/static/js/app.js?v=2.4.0"></script>
 </body>
 </html>
