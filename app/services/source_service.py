@@ -190,13 +190,25 @@ class SourceService:
             return self.snapshot()
         try:
             self.sheets.seed_source_rows(self._rows)
-            existing_ids = {
-                str(row.get("id") or "").strip()
-                for row in self.sheets.get_source_rows()
-            }
+            existing_rows = self._clean_rows(self.sheets.get_source_rows())
+            existing_by_id = {row["id"]: row for row in existing_rows}
             for seed in self._rows:
-                if seed["id"] not in existing_ids:
+                current = existing_by_id.get(seed["id"])
+                if current is None:
                     self.sheets.upsert_source_row(seed)
+                    continue
+                # One-time migration: TopCV stores its canonical root URL. Search
+                # URLs are generated at runtime from Google Sheets keywords.
+                if seed["id"] == "topcv" and current["seed_urls"] != seed["seed_urls"]:
+                    migrated = {
+                        **current,
+                        "seed_urls": list(seed["seed_urls"]),
+                        "adapter_mode": "specialized",
+                        "adapter_key": "topcv",
+                        "crawl_scope": "configured",
+                        "updated_at": _now(),
+                    }
+                    self.sheets.upsert_source_row(migrated)
             return self.refresh()
         except Exception as exc:
             with self._lock:

@@ -109,6 +109,9 @@ class Settings(BaseSettings):
     retry_backoff_factor: float = 1.5
     default_rate_limit_delay: float = 1.0
 
+    # Optional residential proxy for anti-bot protected TopCV pages.
+    topcv_proxy_url: str | None = None
+
     # Security
     secret_key: str = Field(default="ai-lead-intelligence-secure-key-2026", description="Secret key for sessions/tokens")
     allowed_origins: List[str] = ["http://127.0.0.1:8000", "http://localhost:8000"]

@@ -10,12 +10,13 @@ from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
 from bs4 import BeautifulSoup
 
+from app.config import settings
 from app.crawlers.base import ParsedItem, RawDocument, SourceAdapter, extract_published_at
 from app.pipeline.normalize import canonicalize_url, clean_html, normalize_unicode, parse_datetime, utc_now
 from app.services.priority_service import priority_coordinator
 
 logger = logging.getLogger(__name__)
-TOPCV_SEARCH_URL = "https://www.topcv.vn/tim-viec-lam-chuyen-doi-so?type_keyword=1&sba=1"
+TOPCV_ROOT_URL = "https://www.topcv.vn/"
 JOB_URL_RE = re.compile(r"^https://(?:www\.)?topcv\.vn/viec-lam/[^?#]+/\d+\.html$", re.I)
 CHALLENGE_MARKERS = ("cf-chl-", "just a moment", "verify you are human", "checking your browser")
 
@@ -26,16 +27,17 @@ class TopCVAdapter(SourceAdapter):
     is_keyword_feed = True
 
     def __init__(self):
-        super().__init__("topcv", "TopCV · Việc làm chuyển đổi số", [TOPCV_SEARCH_URL], 0.5, 90)
+        super().__init__("topcv", "TopCV · Việc làm chuyển đổi số", [TOPCV_ROOT_URL], 0.5, 90)
         self._document_cache: dict[str, RawDocument] = {}
 
     @staticmethod
     def _crawl4ai_types():
         try:
-            from crawl4ai import AsyncWebCrawler, BrowserConfig, CacheMode, CrawlerRunConfig
+            from crawl4ai import AsyncWebCrawler, BrowserConfig, CacheMode, CrawlerRunConfig, UndetectedAdapter
+            from crawl4ai.async_crawler_strategy import AsyncPlaywrightCrawlerStrategy
         except ImportError as exc:
-            raise RuntimeError("Thiếu Crawl4AI/Playwright và Chromium để crawl TopCV") from exc
-        return AsyncWebCrawler, BrowserConfig, CacheMode, CrawlerRunConfig
+            raise RuntimeError("Thiếu Crawl4AI/Patchright và Chromium để crawl TopCV") from exc
+        return AsyncWebCrawler, BrowserConfig, CacheMode, CrawlerRunConfig, UndetectedAdapter, AsyncPlaywrightCrawlerStrategy
 
     @staticmethod
     def _slugify_keyword(value: str) -> str:
@@ -45,14 +47,13 @@ class TopCVAdapter(SourceAdapter):
 
     def _search_urls(self) -> list[str]:
         urls: list[str] = []
+        # TopCV search formula: /tim-viec-lam-{hyphenated-keyword}
         for keyword in self._discovery_search_keywords():
             slug = self._slugify_keyword(keyword)
             if slug:
                 urls.append(f"https://www.topcv.vn/tim-viec-lam-{slug}?type_keyword=1&sba=1")
-        for seed in self.seed_urls:
-            seed = canonicalize_url(seed)
-            if seed and seed not in urls:
-                urls.append(seed)
+        if not urls:
+            raise RuntimeError("Không có keyword bật Search trực tiếp trong worksheet Keywords")
         return urls
 
     @staticmethod
@@ -93,9 +94,12 @@ class TopCVAdapter(SourceAdapter):
     def _run_config(self, CrawlerRunConfig, CacheMode, *, listing: bool):
         return CrawlerRunConfig(
             cache_mode=CacheMode.BYPASS,
-            wait_until="domcontentloaded",
+            wait_until="load",
             page_timeout=self.timeout * 1000,
             wait_for="css:body",
+            delay_before_return_html=2.0,
+            proxy_config=settings.topcv_proxy_url or None,
+            max_retries=1 if settings.topcv_proxy_url else 0,
             wait_for_timeout=min(self.timeout * 1000, 30_000),
             scan_full_page=listing,
             scroll_delay=0.3,
@@ -135,9 +139,20 @@ class TopCVAdapter(SourceAdapter):
         result = await crawler.arun(url=url, config=config)
         return self._raw_from_result(result, url)
 
+    def _new_crawler(self, AsyncWebCrawler, BrowserConfig, UndetectedAdapter, Strategy):
+        browser_config = self._browser_config(BrowserConfig)
+        crawler_strategy = Strategy(
+            browser_config=browser_config,
+            browser_adapter=UndetectedAdapter(),
+        )
+        return AsyncWebCrawler(
+            crawler_strategy=crawler_strategy,
+            config=browser_config,
+        )
+
     async def _fetch_one_with_browser(self, url: str) -> RawDocument:
-        AsyncWebCrawler, BrowserConfig, CacheMode, CrawlerRunConfig = self._crawl4ai_types()
-        async with AsyncWebCrawler(config=self._browser_config(BrowserConfig)) as crawler:
+        AsyncWebCrawler, BrowserConfig, CacheMode, CrawlerRunConfig, UndetectedAdapter, Strategy = self._crawl4ai_types()
+        async with self._new_crawler(AsyncWebCrawler, BrowserConfig, UndetectedAdapter, Strategy) as crawler:
             return await self._crawl_page(
                 crawler, url, self._run_config(CrawlerRunConfig, CacheMode, listing=False)
             )
@@ -149,12 +164,12 @@ class TopCVAdapter(SourceAdapter):
     ) -> list[str]:
         # This source is limited by timeframe and finite pagination, not an item cap.
         del max_items
-        AsyncWebCrawler, BrowserConfig, CacheMode, CrawlerRunConfig = self._crawl4ai_types()
+        AsyncWebCrawler, BrowserConfig, CacheMode, CrawlerRunConfig, UndetectedAdapter, Strategy = self._crawl4ai_types()
         listing_config = self._run_config(CrawlerRunConfig, CacheMode, listing=True)
         detail_config = self._run_config(CrawlerRunConfig, CacheMode, listing=False)
         discovered: list[str] = []
         seen_urls: set[str] = set()
-        async with AsyncWebCrawler(config=self._browser_config(BrowserConfig)) as crawler:
+        async with self._new_crawler(AsyncWebCrawler, BrowserConfig, UndetectedAdapter, Strategy) as crawler:
             for search_url in self._search_urls():
                 page = 1
                 while True:

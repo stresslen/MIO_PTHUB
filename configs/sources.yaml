@@ -129,6 +129,6 @@ sources:
     enabled: true
     adapter: "app.crawlers.topcv.TopCVAdapter"
     seed_urls:
-      - "https://www.topcv.vn/tim-viec-lam-chuyen-doi-so?type_keyword=1&sba=1"
+      - "https://www.topcv.vn/"
     rate_limit_delay: 0.5
     timeout: 90

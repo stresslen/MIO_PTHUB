@@ -18,6 +18,36 @@ def test_topcv_keyword_slug_and_job_url_extraction():
     ]
 
 
+def test_topcv_builds_search_url_from_each_hyphenated_keyword(monkeypatch):
+    adapter = TopCVAdapter()
+    monkeypatch.setattr(
+        adapter,
+        "_discovery_search_keywords",
+        lambda max_items=None: ["chuyển đổi số", "trí tuệ nhân tạo"],
+    )
+
+    assert adapter.seed_urls == ["https://www.topcv.vn/"]
+    assert adapter._search_urls() == [
+        "https://www.topcv.vn/tim-viec-lam-chuyen-doi-so?type_keyword=1&sba=1",
+        "https://www.topcv.vn/tim-viec-lam-tri-tue-nhan-tao?type_keyword=1&sba=1",
+    ]
+
+
+def test_topcv_run_config_uses_proxy_only_when_configured(monkeypatch):
+    adapter = TopCVAdapter()
+    _, _, CacheMode, CrawlerRunConfig, _, _ = adapter._crawl4ai_types()
+
+    monkeypatch.setattr("app.crawlers.topcv.settings.topcv_proxy_url", None)
+    direct = adapter._run_config(CrawlerRunConfig, CacheMode, listing=True)
+    assert direct.proxy_config is None
+    assert direct.max_retries == 0
+
+    monkeypatch.setattr("app.crawlers.topcv.settings.topcv_proxy_url", "http://user:pass@proxy.test:8080")
+    proxied = adapter._run_config(CrawlerRunConfig, CacheMode, listing=True)
+    assert proxied.proxy_config.server == "http://proxy.test:8080"
+    assert proxied.max_retries == 1
+
+
 async def test_topcv_parser_prefers_jobposting_schema_date_and_company():
     html = """
     <html><body>

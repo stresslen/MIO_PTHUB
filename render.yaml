@@ -44,6 +44,8 @@ services:
         value: relevance
       - key: APIFY_LINKEDIN_RUN_TIMEOUT_SECONDS
         value: 9000
+      - key: TOPCV_PROXY_URL
+        sync: false
       - key: COMPANY_ENRICHMENT_ENABLED
         value: true
       - key: COMPANY_ENRICHMENT_MODE

@@ -1,4 +1,5 @@
 import datetime
+import json
 
 import pytest
 
@@ -59,6 +60,24 @@ def test_source_bootstrap_moves_all_yaml_urls_to_google_sheets_cache():
     assert result["total"] == 12
     assert stored_urls == expected_urls
     assert all(row["adapter_mode"] == "specialized" for row in sheets.rows)
+
+
+def test_bootstrap_migrates_existing_topcv_search_url_to_root():
+    sheets = FakeSourceSheets()
+    service = SourceService(sheets)
+    sheets.rows = [dict(row) for row in service._rows]
+    topcv = next(row for row in sheets.rows if row["id"] == "topcv")
+    topcv["seed_urls"] = json.dumps([
+        "https://www.topcv.vn/tim-viec-lam-chuyen-doi-so?type_keyword=1&sba=1"
+    ])
+    topcv["enabled"] = False
+
+    result = service.bootstrap()
+    migrated = next(row for row in result["items"] if row["id"] == "topcv")
+
+    assert migrated["seed_urls"] == ["https://www.topcv.vn/"]
+    assert migrated["enabled"] is False
+    assert migrated["adapter_key"] == "topcv"
 
 
 def test_failed_custom_url_is_still_saved_for_later_update(monkeypatch):
