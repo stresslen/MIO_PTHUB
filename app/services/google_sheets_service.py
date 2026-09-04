@@ -21,6 +21,13 @@ def _normalize_phone(value: Any) -> str:
     return normalize(value)
 
 
+def _normalize_source_url(value: Any) -> str:
+    """Use one canonical URL representation for durable lead storage."""
+    from app.pipeline.normalize import canonicalize_url
+
+    return canonicalize_url(str(value or "").strip())
+
+
 LEAD_HEADERS = [
     "id", "source", "source_url", "title", "published_at", "crawled_at",
     "organization_name", "organization_type", "need_summary", "need_categories",
@@ -182,6 +189,8 @@ class GoogleSheetsService:
             self._cell_value(
                 _normalize_phone(getattr(lead, name, None))
                 if name == "contact_phone"
+                else _normalize_source_url(getattr(lead, name, None))
+                if name == "source_url"
                 else getattr(lead, name, None)
             )
             for name in LEAD_HEADERS
@@ -200,7 +209,16 @@ class GoogleSheetsService:
         return value
 
     def upsert_lead(self, lead: Any) -> bool:
-        if not self.configured or not self._is_ai_processed(lead):
+        getter = (
+            lead.get
+            if isinstance(lead, dict)
+            else lambda key, default=None: getattr(lead, key, default)
+        )
+        try:
+            score = int(float(getter("score", 0) or 0))
+        except (TypeError, ValueError):
+            score = 0
+        if not self.configured or not self._is_ai_processed(lead) or score < 40:
             return False
         try:
             worksheet = self._worksheet(settings.google_sheets_leads_worksheet, LEAD_HEADERS)
@@ -240,7 +258,10 @@ class GoogleSheetsService:
             missing_rows = [
                 self._lead_row(lead)
                 for lead in leads
-                if str(lead.id) not in existing_ids and self._is_ai_processed(lead)
+                if str(lead.id) not in existing_ids
+                and str(getattr(lead, "status", "") or "").upper() != "ARCHIVED"
+                and self._is_ai_processed(lead)
+                and int(getattr(lead, "score", 0) or 0) >= 40
             ]
             if missing_rows:
                 worksheet.append_rows(missing_rows, value_input_option="RAW")
@@ -284,12 +305,14 @@ class GoogleSheetsService:
             else:
                 records = self._public_records()
             imported = 0
+            seen_urls: set[str] = set()
             for record in records:
                 if not self._is_ai_processed(record):
                     continue
-                fingerprint = str(record.get("content_fingerprint") or "").strip()
-                if not fingerprint or db.query(Lead).filter(Lead.content_fingerprint == fingerprint).first():
+                source_url = _normalize_source_url(record.get("source_url"))
+                if not source_url or source_url in seen_urls or db.query(Lead).filter(Lead.source_url == source_url).first():
                     continue
+                seen_urls.add(source_url)
                 values: dict[str, Any] = {}
                 for field in LEAD_HEADERS:
                     value = record.get(field)
@@ -311,8 +334,12 @@ class GoogleSheetsService:
                         values[field] = float(value)
                     elif field == "contact_phone":
                         values[field] = _normalize_phone(value)
+                    elif field == "source_url":
+                        values[field] = source_url
                     else:
                         values[field] = value
+                if int(values.get("score") or 0) < 40:
+                    continue
                 if not values.get("id"):
                     values.pop("id", None)
                 values["source"] = values.get("source") or "google_sheets"

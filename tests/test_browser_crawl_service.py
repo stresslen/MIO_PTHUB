@@ -90,7 +90,7 @@ async def test_browser_service_enables_javascript_and_dynamic_dom(monkeypatch):
     assert captured["browser"]["enable_stealth"] is True
     assert captured["run"]["wait_until"] == "domcontentloaded"
     assert captured["run"]["flatten_shadow_dom"] is True
-    assert captured["run"]["process_iframes"] is True
+    assert captured["run"]["process_iframes"] is False
     assert captured["run"]["max_retries"] == 0
     crawler = service._crawler
     await service.close()

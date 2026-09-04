@@ -19,7 +19,7 @@ services:
       - key: XAH_SEARCH_URL
         value: https://api.xah.io/v1/search
       - key: XAH_SEARCH_MODEL
-        value: search
+        value: dungcsnd113/gpt-5.6-terra
       - key: XAH_SEARCH_TYPE
         value: web
       - key: XAH_MAX_RESULTS
@@ -61,9 +61,9 @@ services:
       - key: GEMINI_API_KEY
         sync: false
       - key: GEMINI_MODEL
-        value: levuphong2909/gemini-3.7-flash-high
+        value: levuphong2909/gemini-3.8-flash-high
       - key: GEMINI_BASE_URL
-        value: https://api.xah.io/v1/chat/completions
+        value: https://api.xah.io/v1
       - key: GOOGLE_SHEETS_SPREADSHEET_ID
         value: 17Glsl0gB7e0YKWAmxPdDUSDysGaeujudmN21Gts0GFw
       - key: GOOGLE_SHEETS_LEADS_WORKSHEET

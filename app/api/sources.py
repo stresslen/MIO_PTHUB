@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -11,18 +10,18 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models.lead import Lead
-from app.models.source import SourceImportRequest, SourceInfo, CrawlRun
+from app.models.source import (
+    CrawlJob,
+    CrawlJobStatusEnum,
+    CrawlRun,
+    SourceImportRequest,
+    SourceInfo,
+)
+from app.services.crawl_job_service import crawl_job_service
 from app.services.source_service import source_service
 from app.services.linkedin_settings_service import linkedin_settings_service
 
 router = APIRouter(prefix="/sources", tags=["Sources"])
-
-
-async def _run_source_probe(source_id: str):
-    probe = source_service.probe
-    if inspect.iscoroutinefunction(probe):
-        return await probe(source_id)
-    return await asyncio.to_thread(probe, source_id)
 
 
 class LinkedInConfigUpdate(BaseModel):
@@ -46,6 +45,20 @@ def get_sources(db: Session = Depends(get_db)):
             .order_by(CrawlRun.start_time.desc())
             .first()
         )
+        active_job = (
+            db.query(CrawlJob)
+            .filter(
+                CrawlJob.status.in_(
+                    [CrawlJobStatusEnum.QUEUED.value, CrawlJobStatusEnum.RUNNING.value]
+                ),
+                (CrawlJob.source_id == src_id) | (CrawlJob.source_id.is_(None)),
+            )
+            .order_by(CrawlJob.requested_at.asc())
+            .first()
+        )
+        runtime_status = (
+            active_job.status if active_job else (last_run.status if last_run else src["status"])
+        )
         results.append(SourceInfo(
             id=src_id,
             name=src["name"],
@@ -57,10 +70,10 @@ def get_sources(db: Session = Depends(get_db)):
             include_in_schedule=src["include_in_schedule"],
             priority="P0" if src["adapter_mode"] == "specialized" else "CUSTOM",
             description=src["description"],
-            status=src["status"],
+            status=runtime_status,
             last_error=src["last_error"] or None,
             last_crawl_at=last_run.start_time if last_run else None,
-            last_status=src["status"],
+            last_status=runtime_status,
             total_leads_count=total_leads,
             hot_leads_count=hot_leads,
         ))
@@ -91,16 +104,21 @@ async def import_sources(payload: SourceImportRequest):
             payload.url,
             payload.include_in_schedule,
         )
-        updated = []
         needs_update = 0
+        queued_job_ids = []
         for item in result["items"]:
             if item["status"] == "NEW":
-                item = await _run_source_probe(item["id"])
+                job = crawl_job_service.enqueue(
+                    source_id=item["id"],
+                    timeframe="1_week",
+                    force_recrawl=False,
+                    trigger="FE",
+                )
+                queued_job_ids.append(job.id)
             if item["status"] == "NEEDS_ADAPTER":
                 needs_update += 1
-            updated.append(item)
-        result["items"] = updated
         result["needs_update"] = needs_update
+        result["queued_job_ids"] = queued_job_ids
         return result
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -122,7 +140,11 @@ def refresh_sources():
 
 @router.post("/{source_id}/probe")
 async def probe_source(source_id: str):
-    try:
-        return await _run_source_probe(source_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail="Không tìm thấy nguồn") from exc
+    if source_service.get(source_id) is None:
+        raise HTTPException(status_code=404, detail="Không tìm thấy nguồn")
+    return crawl_job_service.enqueue(
+        source_id=source_id,
+        timeframe="1_week",
+        force_recrawl=False,
+        trigger="FE",
+    )

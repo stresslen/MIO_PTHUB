@@ -87,5 +87,9 @@ def update_lead_status(
     updated = lead_service.update_lead_status(db, lead_id, payload.status, payload.sales_notes)
     if not updated:
         raise HTTPException(status_code=404, detail="Lead not found")
-    google_sheets_service.upsert_lead(updated)
+    if google_sheets_service.configured:
+        try:
+            google_sheets_service.upsert_lead(updated)
+        except Exception:
+            pass
     return LeadRead.model_validate(updated)

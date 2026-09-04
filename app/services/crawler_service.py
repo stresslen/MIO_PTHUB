@@ -1,11 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import datetime
 import logging
 from pathlib import Path
 from typing import Dict, List, Optional
 from zoneinfo import ZoneInfo
-from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.crawlers import get_adapter, get_all_adapters, SourceAdapter
@@ -14,9 +14,10 @@ from app.models.lead import Lead, ActionEnum, LeadStatusEnum
 from app.models.source import CrawlRun, CrawlStatusEnum
 from app.pipeline.dedup import compute_fingerprint, is_duplicate
 from app.pipeline.extract import ai_extractor, prefilter_keywords, AIAuthenticationError, AIQuotaOrAPIError
-from app.pipeline.normalize import clean_html, parse_datetime, utc_now
+from app.pipeline.normalize import canonicalize_url, clean_html, parse_datetime, utc_now
 from app.pipeline.scoring import scoring_engine
 from app.services.priority_service import priority_coordinator
+from app.services.keyword_service import keyword_service
 from app.services.google_sheets_service import google_sheets_service
 from app.services.source_service import CUSTOM_MAX_PAGES, source_service
 from app.services.company_enrichment_service import company_enrichment_service, CompanyEnrichmentResult
@@ -83,6 +84,7 @@ class CrawlerService:
             organization_website=extracted.organization_website,
             organization_tax_code=extracted.organization_tax_code,
             location=extracted.location,
+            round_one_context=extracted.model_dump_json(exclude_none=True),
         )
         self._merge_company_contact(extracted, result)
         return result
@@ -103,6 +105,80 @@ class CrawlerService:
             **kwargs,
         )
 
+    async def _record_source_status(self, source_id: str, status: str, error=None):
+        """Persist source status off the event loop and behind the priority gate."""
+        return await priority_coordinator.run_blocking(
+            source_service.record_status,
+            source_id,
+            status,
+            error,
+            worker_name=f"Persist source status: {source_id}",
+        )
+
+    async def recover_interrupted_runs(self) -> int:
+        """Mark runs left RUNNING by a process restart as INTERRUPTED."""
+        db = SessionLocal()
+        recovered: list[tuple[str, str]] = []
+        try:
+            runs = db.query(CrawlRun).filter(
+                CrawlRun.status == CrawlStatusEnum.RUNNING.value
+            ).all()
+            now = utc_now()
+            for run in runs:
+                run.status = CrawlStatusEnum.INTERRUPTED.value
+                run.end_time = now
+                run.error_message = "Backend khởi động lại khi crawl chưa hoàn tất"
+                recovered.append((run.source, run.error_message))
+            if runs:
+                db.commit()
+        finally:
+            db.close()
+
+        # The source registry may also contain RUNNING from a prior process even
+        # when its DB row was already finalized or Sheets persistence failed.
+        stale_sources = {
+            item["id"]
+            for item in source_service.snapshot().get("items", [])
+            if item.get("status") == CrawlStatusEnum.RUNNING.value
+        }
+        source_ids = stale_sources | {source_id for source_id, _ in recovered}
+        for source_id in sorted(source_ids):
+            await self._record_source_status(source_id, CrawlStatusEnum.INTERRUPTED.value)
+        if source_ids:
+            logger.warning(
+                "[Recovery] Đã đánh dấu %s crawl run và %s source bị gián đoạn sau backend restart",
+                len(recovered),
+                len(source_ids),
+            )
+        return len(recovered)
+
+    async def _check_pause_and_cancel(self, job_id: Optional[str]) -> None:
+        """
+        Check if job is PAUSED (wait in place without killing task) or CANCELLED/DELETED (raise CancelledError).
+        """
+        if not job_id:
+            return
+        from app.services.crawl_job_service import crawl_job_service
+        from app.models.source import CrawlJobStatusEnum
+        was_paused = False
+        while True:
+            status = await asyncio.to_thread(crawl_job_service.get_job_status, job_id)
+            if status is None or status in (
+                CrawlJobStatusEnum.INTERRUPTED.value,
+                CrawlJobStatusEnum.FAILED.value,
+            ):
+                logger.warning(f"[Crawler] Job {job_id} đã bị hủy hoặc xóa (status={status}); ngắt tiến trình cào.")
+                raise asyncio.CancelledError(f"Job {job_id} cancelled or deleted")
+            if status == CrawlJobStatusEnum.PAUSED.value:
+                if not was_paused:
+                    logger.info(f"[Crawler] ⏸️ Job {job_id} đang TẠM DỪNG. Đóng băng vị trí cào, bảo lưu dữ liệu, chờ lệnh tiếp tục...")
+                    was_paused = True
+                await asyncio.sleep(1.0)
+                continue
+            if was_paused:
+                logger.info(f"[Crawler] ▶️ Job {job_id} đã TIẾP TỤC CHẠY. Tiếp tục cào các bài viết tiếp theo...")
+            break
+
     async def run_crawler_for_source(
         self,
         source_id: str,
@@ -110,17 +186,16 @@ class CrawlerService:
         force_recrawl: bool = False,
         timeframe: Optional[str] = "1_week",
         is_manual_fe: bool = False,
+        job_id: Optional[str] = None,
     ) -> CrawlRun:
         """
         Execute end-to-end crawl and pipeline processing for a single source.
         Filters by timeframe: 1_day (24h), 1_week (7d), 1_month (30d), all (None).
-        If is_manual_fe=True, executes with HIGHEST PREEMPTIVE PRIORITY.
+        Manual jobs keep their source-selection semantics but no longer acquire FE priority.
         """
-        if is_manual_fe:
-            async with priority_coordinator.fe_priority_context(f"Crawl Source: {source_id}"):
-                return await self._run_crawler_for_source_core(source_id, db, force_recrawl, timeframe, is_manual_fe=True)
-        else:
-            return await self._run_crawler_for_source_core(source_id, db, force_recrawl, timeframe, is_manual_fe=False)
+        return await self._run_crawler_for_source_core(
+            source_id, db, force_recrawl, timeframe, is_manual_fe=is_manual_fe, job_id=job_id
+        )
 
     async def _run_crawler_for_source_core(
         self,
@@ -129,6 +204,7 @@ class CrawlerService:
         force_recrawl: bool = False,
         timeframe: Optional[str] = "1_week",
         is_manual_fe: bool = False,
+        job_id: Optional[str] = None,
     ) -> CrawlRun:
         close_db_on_exit = False
         if db is None:
@@ -136,7 +212,7 @@ class CrawlerService:
             close_db_on_exit = True
 
         adapter = get_adapter(source_id)
-        source_service.record_status(source_id, "RUNNING")
+        await self._record_source_status(source_id, "RUNNING")
 
         # Calculate since cutoff datetime
         since = calculate_since_datetime(timeframe)
@@ -164,6 +240,7 @@ class CrawlerService:
             logger.info(f"[{source_id}] Discovered {len(discovered_urls)} live URLs")
 
             for url in discovered_urls:
+                await self._check_pause_and_cancel(job_id)
                 if not is_manual_fe:
                     await priority_coordinator.yield_if_fe_active(f"Crawl {source_id}")
                 try:
@@ -184,8 +261,9 @@ class CrawlerService:
                         continue
 
                     # 4. Fingerprint & Dedup check
-                    fingerprint = compute_fingerprint(url, parsed.title, parsed.published_at)
-                    existing = db.query(Lead).filter(or_(Lead.content_fingerprint == fingerprint, Lead.source_url == url)).first()
+                    canonical_url = canonicalize_url(url)
+                    fingerprint = compute_fingerprint(canonical_url)
+                    existing = db.query(Lead).filter(Lead.source_url == canonical_url).first()
                     if existing:
                         crawl_run.duplicate_leads += 1
                         logger.info(f"[{source_id}] Duplicate skipped: '{parsed.title[:35]}...'")
@@ -194,7 +272,7 @@ class CrawlerService:
                     # 5. Custom sites crawl every page; provider keyword feeds were already filtered upstream.
                     if getattr(adapter, "is_generic", False) or getattr(adapter, "is_keyword_feed", False):
                         category = "Nguồn tìm theo từ khóa" if getattr(adapter, "is_keyword_feed", False) else "Website tùy chỉnh"
-                        is_rel, matched_kws, matched_cats = True, [], [category]
+                        is_rel, matched_kws, matched_cats = True, list(keyword_service.get_config().get("discovery_search", {}).get("keywords", [])) if getattr(adapter, "is_keyword_feed", False) else [], [category]
                     else:
                         is_rel, matched_kws, matched_cats = prefilter_keywords(
                             parsed.title, parsed.raw_content
@@ -210,6 +288,7 @@ class CrawlerService:
                         parsed.raw_content,
                         source=source_id,
                         raise_on_api_error=True,
+                        matched_keywords=matched_kws,
                     )
                     enrichment = await self._enrich_company(extracted)
 
@@ -232,12 +311,19 @@ class CrawlerService:
                         published_at=parsed.published_at,
                         relevance=extracted.relevance,
                         raw_evidence=extracted.evidence,
+                        matched_keywords=matched_kws,
                     )
+
+                    # 7.1 Score threshold filter: Chỉ lưu và hiển thị lead có score >= 40
+                    if score_res.total_score < 40:
+                        logger.info(f"[{source_id}] Bỏ qua bài viết có điểm thấp ({score_res.total_score} < 40): '{parsed.title[:35]}...'")
+                        crawl_run.filtered_out += 1
+                        continue
 
                     # 8. Persist every keyword-related item successfully processed by AI.
                     lead = Lead(
                         source=source_id,
-                        source_url=url,
+                        source_url=canonical_url,
                         title=parsed.title,
                         published_at=parsed.published_at,
                         crawled_at=item_crawled_at,
@@ -271,17 +357,21 @@ class CrawlerService:
                     crawl_run.new_leads += 1
                     db.commit()
                     db.refresh(lead)
-                    await priority_coordinator.run_blocking(
-                        google_sheets_service.upsert_lead,
-                        lead,
-                        worker_name="Google Sheets lead upsert",
-                    )
-                    if organization is not None:
-                        await priority_coordinator.run_blocking(
-                            google_sheets_service.upsert_organization_profile,
-                            organization.id,
-                            worker_name="Google Sheets organization upsert",
-                        )
+                    if google_sheets_service.configured:
+                        try:
+                            await priority_coordinator.run_blocking(
+                                google_sheets_service.upsert_lead,
+                                lead,
+                                worker_name="Google Sheets lead upsert",
+                            )
+                            if organization is not None:
+                                await priority_coordinator.run_blocking(
+                                    google_sheets_service.upsert_organization_profile,
+                                    organization.id,
+                                    worker_name="Google Sheets organization upsert",
+                                )
+                        except Exception:
+                            logger.warning("[Crawler] Không thể sync lên Google Sheets; dữ liệu đã lưu an toàn vào SQLite")
                     logger.info(f"[{source_id}] ✅ Đã lưu bài liên quan sau AI: '{parsed.title[:40]}...' (Score: {score_res.total_score} - {score_res.recommended_action})")
 
                 except AIAuthenticationError as auth_err:
@@ -332,7 +422,7 @@ class CrawlerService:
                 db.commit()
             except Exception:
                 db.rollback()
-            source_service.record_status(
+            await self._record_source_status(
                 source_id,
                 crawl_run.status,
                 None if crawl_run.error_count == 0 else (crawl_run.error_message or f"{crawl_run.error_count} trang lỗi"),
@@ -349,7 +439,7 @@ class CrawlerService:
                 db.commit()
             except Exception:
                 db.rollback()
-            source_service.record_status(source_id, "FAILED", e)
+            await self._record_source_status(source_id, "FAILED", e)
 
         finally:
             if close_db_on_exit:
@@ -380,7 +470,13 @@ class CrawlerService:
                 if not content:
                     content = lead.title
 
-                extracted = await self._extract_with_priority(lead.title, content, source=lead.source, raise_on_api_error=True)
+                extracted = await self._extract_with_priority(
+                    lead.title,
+                    content,
+                    source=lead.source,
+                    raise_on_api_error=True,
+                    matched_keywords=lead.keywords_matched or [],
+                )
                 enrichment = await self._enrich_company(extracted)
                 combined_cats = list(set((lead.need_categories or []) + extracted.need_categories))
 
@@ -397,6 +493,7 @@ class CrawlerService:
                     published_at=lead.published_at,
                     relevance=extracted.relevance,
                     raw_evidence=extracted.evidence,
+                    matched_keywords=lead.keywords_matched or [],
                 )
 
                 lead.organization_type = extracted.organization_type or "other"
@@ -422,17 +519,21 @@ class CrawlerService:
                 organization = company_enrichment_service.persist(db, lead, enrichment)
                 db.commit()
                 db.refresh(lead)
-                await priority_coordinator.run_blocking(
-                    google_sheets_service.upsert_lead,
-                    lead,
-                    worker_name="Google Sheets lead upsert",
-                )
-                if organization is not None:
-                    await priority_coordinator.run_blocking(
-                        google_sheets_service.upsert_organization_profile,
-                        organization.id,
-                        worker_name="Google Sheets organization upsert",
-                    )
+                if google_sheets_service.configured:
+                    try:
+                        await priority_coordinator.run_blocking(
+                            google_sheets_service.upsert_lead,
+                            lead,
+                            worker_name="Google Sheets lead upsert",
+                        )
+                        if organization is not None:
+                            await priority_coordinator.run_blocking(
+                                google_sheets_service.upsert_organization_profile,
+                                organization.id,
+                                worker_name="Google Sheets organization upsert",
+                            )
+                    except Exception:
+                        logger.warning("[QueueWorker] Không thể sync lên Google Sheets; dữ liệu đã lưu an toàn vào SQLite")
                 processed_count += 1
                 logger.info(f"[QueueWorker] ✅ Đã xử lý xong bài liên quan trong hàng đợi: '{lead.title[:40]}' (Score: {score_res.total_score})")
 
@@ -451,16 +552,15 @@ class CrawlerService:
         timeframe: Optional[str] = "1_month",
         batch_size: int = 25,
         is_manual_fe: bool = False,
+        job_id: Optional[str] = None,
     ) -> List[CrawlRun]:
         """
         Round-Robin Interleaved Multi-Source Crawling:
-        If is_manual_fe=True, executes with HIGHEST PREEMPTIVE PRIORITY over background tasks.
+        Manual jobs include every enabled source; scheduled jobs use scheduled sources only.
         """
-        if is_manual_fe:
-            async with priority_coordinator.fe_priority_context(f"Crawl All Sources ({timeframe})"):
-                return await self._run_all_sources_core(force_recrawl, timeframe, batch_size, is_manual_fe=True)
-        else:
-            return await self._run_all_sources_core(force_recrawl, timeframe, batch_size, is_manual_fe=False)
+        return await self._run_all_sources_core(
+            force_recrawl, timeframe, batch_size, is_manual_fe=is_manual_fe, job_id=job_id
+        )
 
     async def _run_all_sources_core(
         self,
@@ -468,6 +568,7 @@ class CrawlerService:
         timeframe: Optional[str] = "1_month",
         batch_size: int = 25,
         is_manual_fe: bool = False,
+        job_id: Optional[str] = None,
     ) -> List[CrawlRun]:
         logger.info(f"[RoundRobin] 🚀 Bắt đầu crawl xoay vòng đa nguồn (Batch: {batch_size} bài/nguồn, Timeframe: {timeframe}, is_manual_fe={is_manual_fe})...")
         adapters = get_all_adapters(scheduled_only=not is_manual_fe)
@@ -483,6 +584,7 @@ class CrawlerService:
         index_map: Dict[str, int] = {}
 
         for source_id, adapter in adapters.items():
+            await self._check_pause_and_cancel(job_id)
             if not is_manual_fe:
                 await priority_coordinator.yield_if_fe_active("Daily Scheduler Discovery")
             run = CrawlRun(
@@ -500,7 +602,7 @@ class CrawlerService:
             db.refresh(run)
             crawl_runs[source_id] = run
             index_map[source_id] = 0
-            source_service.record_status(source_id, "RUNNING")
+            await self._record_source_status(source_id, "RUNNING")
 
             # Discover URLs for this source
             try:
@@ -516,19 +618,21 @@ class CrawlerService:
                 run.status = CrawlStatusEnum.FAILED.value
                 run.error_message = str(disc_err)
                 db.commit()
-                source_service.record_status(source_id, "FAILED", disc_err)
+                await self._record_source_status(source_id, "FAILED", disc_err)
 
         # 2. Round-Robin Batch Execution Loop (interleaved across enabled sources)
         round_num = 1
         stop_all = False
 
         while not stop_all:
+            await self._check_pause_and_cancel(job_id)
             if not is_manual_fe:
                 await priority_coordinator.yield_if_fe_active(f"Daily Scheduler Round {round_num}")
             active_in_this_round = 0
             logger.info(f"[RoundRobin] 🔄 Bắt đầu Vòng {round_num} (quét xoay vòng tối đa {batch_size} bài/nguồn)...")
 
             for source_id, adapter in adapters.items():
+                await self._check_pause_and_cancel(job_id)
                 if not is_manual_fe:
                     await priority_coordinator.yield_if_fe_active(f"Daily Scheduler Round {round_num} - {source_id}")
                 run = crawl_runs[source_id]
@@ -545,6 +649,7 @@ class CrawlerService:
                 logger.info(f"[RoundRobin Vòng {round_num}] [{source_id}] Xử lý batch {len(batch_urls)} bài (Vị trí {start_idx + 1}..{start_idx + len(batch_urls)} trên tổng {len(urls)} bài)...")
 
                 for url in batch_urls:
+                    await self._check_pause_and_cancel(job_id)
                     if not is_manual_fe:
                         await priority_coordinator.yield_if_fe_active(f"Daily Scheduler Item - {source_id}")
                     try:
@@ -561,8 +666,9 @@ class CrawlerService:
                             continue
 
                         # Deduplication check
-                        fingerprint = compute_fingerprint(url, parsed.title, parsed.published_at)
-                        existing = db.query(Lead).filter(or_(Lead.content_fingerprint == fingerprint, Lead.source_url == url)).first()
+                        canonical_url = canonicalize_url(url)
+                        fingerprint = compute_fingerprint(canonical_url)
+                        existing = db.query(Lead).filter(Lead.source_url == canonical_url).first()
                         if existing:
                             run.duplicate_leads += 1
                             logger.info(f"[{source_id}] Duplicate skipped: '{parsed.title[:35]}...'")
@@ -571,7 +677,7 @@ class CrawlerService:
                         # Custom sites crawl every page; provider keyword feeds were already filtered upstream.
                         if getattr(adapter, "is_generic", False) or getattr(adapter, "is_keyword_feed", False):
                             category = "Nguồn tìm theo từ khóa" if getattr(adapter, "is_keyword_feed", False) else "Website tùy chỉnh"
-                            is_rel, matched_kws, matched_cats = True, [], [category]
+                            is_rel, matched_kws, matched_cats = True, list(keyword_service.get_config().get("discovery_search", {}).get("keywords", [])) if getattr(adapter, "is_keyword_feed", False) else [], [category]
                         else:
                             is_rel, matched_kws, matched_cats = prefilter_keywords(
                                 parsed.title, parsed.raw_content
@@ -581,7 +687,7 @@ class CrawlerService:
                             continue
 
                         # AI Extraction (round 1), then verified organization enrichment (round 2).
-                        extracted = await self._extract_with_priority(parsed.title, parsed.raw_content, source=source_id, raise_on_api_error=True)
+                        extracted = await self._extract_with_priority(parsed.title, parsed.raw_content, source=source_id, raise_on_api_error=True, matched_keywords=matched_kws)
                         enrichment = await self._enrich_company(extracted)
                         combined_categories = list(set(matched_cats + extracted.need_categories))
 
@@ -599,12 +705,19 @@ class CrawlerService:
                             published_at=parsed.published_at,
                             relevance=extracted.relevance,
                             raw_evidence=extracted.evidence,
+                            matched_keywords=matched_kws,
                         )
+
+                        # Score threshold filter: Chỉ lưu và hiển thị lead có score >= 40
+                        if score_res.total_score < 40:
+                            logger.info(f"[{source_id}] Bỏ qua bài viết có điểm thấp ({score_res.total_score} < 40): '{parsed.title[:35]}...'")
+                            run.filtered_out += 1
+                            continue
 
                         # Persist every keyword-related item successfully processed by AI.
                         lead = Lead(
                             source=source_id,
-                            source_url=url,
+                            source_url=canonical_url,
                             title=parsed.title,
                             published_at=parsed.published_at,
                             crawled_at=item_crawled_at,
@@ -638,17 +751,21 @@ class CrawlerService:
                         run.new_leads += 1
                         db.commit()
                         db.refresh(lead)
-                        await priority_coordinator.run_blocking(
-                            google_sheets_service.upsert_lead,
-                            lead,
-                            worker_name="Google Sheets lead upsert",
-                        )
-                        if organization is not None:
-                            await priority_coordinator.run_blocking(
-                                google_sheets_service.upsert_organization_profile,
-                                organization.id,
-                                worker_name="Google Sheets organization upsert",
-                            )
+                        if google_sheets_service.configured:
+                            try:
+                                await priority_coordinator.run_blocking(
+                                    google_sheets_service.upsert_lead,
+                                    lead,
+                                    worker_name="Google Sheets lead upsert",
+                                )
+                                if organization is not None:
+                                    await priority_coordinator.run_blocking(
+                                        google_sheets_service.upsert_organization_profile,
+                                        organization.id,
+                                        worker_name="Google Sheets organization upsert",
+                                    )
+                            except Exception:
+                                logger.warning("[Crawler] Không thể sync lên Google Sheets; dữ liệu đã lưu an toàn vào SQLite")
                         logger.info(f"[{source_id}] ✅ Đã lưu bài liên quan sau AI: '{parsed.title[:40]}...' (Score: {score_res.total_score} - {score_res.recommended_action})")
 
                     except AIAuthenticationError as auth_err:
@@ -708,7 +825,7 @@ class CrawlerService:
                 db.commit()
             except Exception:
                 db.rollback()
-            source_service.record_status(
+            await self._record_source_status(
                 source_id,
                 run.status,
                 None if run.error_count == 0 and run.status != CrawlStatusEnum.FAILED.value
@@ -721,4 +838,3 @@ class CrawlerService:
 
 
 crawler_service = CrawlerService()
-

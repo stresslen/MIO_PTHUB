@@ -103,7 +103,7 @@ class BaoDauThauAdapter(SourceAdapter):
             or soup.find("article")
             or soup.find("main")
         )
-        body_text = clean_html(str(content_el)) if content_el else raw_doc.text
+        body_text = clean_html(raw_doc.html)
 
         # 4. Meta Description & Keywords
         meta_desc = soup.find("meta", attrs={"name": "description"})

@@ -12,6 +12,8 @@ from typing import Any
 from urllib.parse import urlparse, urlunparse
 
 from app.config import get_sources_config, settings
+from app.database import SessionLocal
+from app.models.source import CrawlerSourceItem
 from app.pipeline.normalize import clean_html
 from app.services.browser_crawl_service import browser_crawl_service
 from app.services.priority_service import priority_coordinator
@@ -183,45 +185,170 @@ class SourceService:
             })
         return rows
 
-    def bootstrap(self) -> dict[str, Any]:
-        if not self.sheets.configured:
-            return self.snapshot()
+    @staticmethod
+    def _load_from_sqlite() -> list[dict[str, Any]]:
+        session = SessionLocal()
         try:
-            self.sheets.seed_source_rows(self._rows)
-            existing_rows = self._clean_rows(self.sheets.get_source_rows())
-            existing_by_id = {row["id"]: row for row in existing_rows}
-            for seed in self._rows:
-                current = existing_by_id.get(seed["id"])
-                if current is None:
-                    self.sheets.upsert_source_row(seed)
-                    continue
-                # One-time migration: TopCV stores its canonical root URL. Search
-                # URLs are generated at runtime from Google Sheets keywords.
-                if seed["id"] == "topcv" and current["seed_urls"] != seed["seed_urls"]:
-                    migrated = {
-                        **current,
-                        "seed_urls": list(seed["seed_urls"]),
-                        "adapter_mode": "specialized",
-                        "adapter_key": "topcv",
-                        "crawl_scope": "configured",
-                        "updated_at": _now(),
-                    }
-                    self.sheets.upsert_source_row(migrated)
+            items = session.query(CrawlerSourceItem).all()
+            rows = []
+            for item in items:
+                rows.append({
+                    "id": item.id,
+                    "name": item.name,
+                    "description": item.description or "",
+                    "seed_urls": item.seed_urls if isinstance(item.seed_urls, list) else [],
+                    "adapter_mode": item.adapter_mode or "specialized",
+                    "adapter_key": item.adapter_key or item.id,
+                    "crawl_scope": item.crawl_scope or "configured",
+                    "rate_limit_delay": float(item.rate_limit_delay or 1.0),
+                    "timeout": int(item.timeout or 30),
+                    "enabled": bool(item.enabled),
+                    "include_in_schedule": bool(item.include_in_schedule),
+                    "status": item.status or "READY",
+                    "last_error": item.last_error or "",
+                    "last_attempt_at": item.last_attempt_at or "",
+                    "last_success_at": item.last_success_at or "",
+                    "created_at": item.created_at or "",
+                    "updated_at": item.updated_at or "",
+                })
+            return rows
+        finally:
+            session.close()
+
+    @staticmethod
+    def _seed_sqlite(rows: list[dict[str, Any]]) -> None:
+        session = SessionLocal()
+        try:
+            count = session.query(CrawlerSourceItem).count()
+            if count == 0:
+                for r in rows:
+                    item = CrawlerSourceItem(
+                        id=r["id"],
+                        name=r.get("name") or r["id"],
+                        description=r.get("description") or "",
+                        seed_urls=r.get("seed_urls") or [],
+                        adapter_mode=r.get("adapter_mode") or "specialized",
+                        adapter_key=r.get("adapter_key") or r["id"],
+                        crawl_scope=r.get("crawl_scope") or "configured",
+                        rate_limit_delay=float(r.get("rate_limit_delay") or 1.0),
+                        timeout=int(r.get("timeout") or 30),
+                        enabled=bool(r.get("enabled", True)),
+                        include_in_schedule=bool(r.get("include_in_schedule", True)),
+                        status=r.get("status") or "READY",
+                        last_error=r.get("last_error") or "",
+                        last_attempt_at=r.get("last_attempt_at") or "",
+                        last_success_at=r.get("last_success_at") or "",
+                        created_at=r.get("created_at") or "",
+                        updated_at=r.get("updated_at") or "",
+                    )
+                    session.add(item)
+                session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    @staticmethod
+    def _save_to_sqlite(item: dict[str, Any]) -> None:
+        session = SessionLocal()
+        try:
+            db_item = session.query(CrawlerSourceItem).filter_by(id=item["id"]).first()
+            if db_item is None:
+                db_item = CrawlerSourceItem(
+                    id=item["id"],
+                    name=item.get("name") or item["id"],
+                    description=item.get("description") or "",
+                    seed_urls=item.get("seed_urls") or [],
+                    adapter_mode=item.get("adapter_mode") or "specialized",
+                    adapter_key=item.get("adapter_key") or item["id"],
+                    crawl_scope=item.get("crawl_scope") or "configured",
+                    rate_limit_delay=float(item.get("rate_limit_delay") or 1.0),
+                    timeout=int(item.get("timeout") or 30),
+                    enabled=bool(item.get("enabled", True)),
+                    include_in_schedule=bool(item.get("include_in_schedule", True)),
+                    status=item.get("status") or "READY",
+                    last_error=item.get("last_error") or "",
+                    last_attempt_at=item.get("last_attempt_at") or "",
+                    last_success_at=item.get("last_success_at") or "",
+                    created_at=item.get("created_at") or "",
+                    updated_at=item.get("updated_at") or _now(),
+                )
+                session.add(db_item)
+            else:
+                db_item.name = item.get("name") or db_item.name
+                db_item.description = item.get("description") or db_item.description
+                db_item.seed_urls = item.get("seed_urls") or db_item.seed_urls
+                db_item.adapter_mode = item.get("adapter_mode") or db_item.adapter_mode
+                db_item.adapter_key = item.get("adapter_key") or db_item.adapter_key
+                db_item.crawl_scope = item.get("crawl_scope") or db_item.crawl_scope
+                db_item.rate_limit_delay = float(item.get("rate_limit_delay") or db_item.rate_limit_delay)
+                db_item.timeout = int(item.get("timeout") or db_item.timeout)
+                db_item.enabled = bool(item.get("enabled", db_item.enabled))
+                db_item.include_in_schedule = bool(item.get("include_in_schedule", db_item.include_in_schedule))
+                db_item.status = item.get("status") or db_item.status
+                db_item.last_error = item.get("last_error") if item.get("last_error") is not None else db_item.last_error
+                db_item.last_attempt_at = item.get("last_attempt_at") or db_item.last_attempt_at
+                db_item.last_success_at = item.get("last_success_at") or db_item.last_success_at
+                db_item.updated_at = item.get("updated_at") or _now()
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    def bootstrap(self) -> dict[str, Any]:
+        if self._sheets is not None and getattr(self._sheets, "configured", False):
+            try:
+                self.sheets.seed_source_rows(self._rows)
+                existing_rows = self._clean_rows(self.sheets.get_source_rows())
+                existing_by_id = {row["id"]: row for row in existing_rows}
+                for seed in self._rows:
+                    current = existing_by_id.get(seed["id"])
+                    if current is None:
+                        self.sheets.upsert_source_row(seed)
+                        continue
+                    if seed["id"] == "topcv" and current["seed_urls"] != seed["seed_urls"]:
+                        migrated = {
+                            **current,
+                            "seed_urls": list(seed["seed_urls"]),
+                            "adapter_mode": "specialized",
+                            "adapter_key": "topcv",
+                            "crawl_scope": "configured",
+                            "updated_at": _now(),
+                        }
+                        self.sheets.upsert_source_row(migrated)
+                return self.refresh()
+            except Exception as exc:
+                with self._lock:
+                    self._last_error = str(exc)
+                raise
+
+        # SQLite storage (local primary database)
+        try:
+            self._seed_sqlite(self._rows)
             return self.refresh()
         except Exception as exc:
             with self._lock:
                 self._last_error = str(exc)
-            raise
+            return self.snapshot()
 
     def refresh(self) -> dict[str, Any]:
-        if not self.sheets.configured:
-            raise RuntimeError("Google Sheets chưa được cấu hình để đồng bộ nguồn")
-        rows = self._clean_rows(self.sheets.get_source_rows())
-        if not rows:
-            raise RuntimeError("Worksheet Sources không có nguồn hợp lệ")
+        if self._sheets is not None and getattr(self._sheets, "configured", False):
+            rows = self._clean_rows(self.sheets.get_source_rows())
+            if not rows:
+                raise RuntimeError("Worksheet Sources không có nguồn hợp lệ")
+            source_name = "google_sheets"
+        else:
+            rows = self._clean_rows(self._load_from_sqlite())
+            if not rows:
+                rows = self._rows
+            source_name = "sqlite"
+
         with self._lock:
             self._rows = rows
-            self._source = "google_sheets"
+            self._source = source_name
             self._last_synced_at = _now()
             self._last_error = None
         return self.snapshot()
@@ -257,7 +384,6 @@ class SourceService:
             ]
 
     def _store(self, item: dict[str, Any]) -> None:
-        self.sheets.upsert_source_row(item)
         with self._lock:
             for index, current in enumerate(self._rows):
                 if current["id"] == item["id"]:
@@ -265,13 +391,24 @@ class SourceService:
                     break
             else:
                 self._rows.append(dict(item))
-            self._source = "google_sheets"
-            self._last_synced_at = _now()
+
+        if self._sheets is not None and getattr(self._sheets, "configured", False):
+            try:
+                self.sheets.upsert_source_row(item)
+            except Exception:
+                logger.exception("Không thể lưu trạng thái nguồn %s lên Google Sheets", item.get("id"))
+                raise
+            with self._lock:
+                self._source = "google_sheets"
+                self._last_synced_at = _now()
+        else:
+            self._save_to_sqlite(item)
+            with self._lock:
+                self._source = "sqlite"
+                self._last_synced_at = _now()
 
     def add_url(self, name: str, url: str, include_in_schedule: bool = False) -> dict[str, Any]:
         """Persist exactly one user-named website source before probing it."""
-        if not self.sheets.configured:
-            raise RuntimeError("Google Sheets chưa được cấu hình để lưu nguồn")
         display_name = re.sub(r"\s+", " ", str(name or "")).strip()
         if not display_name:
             raise ValueError("Tên trang đang trống")

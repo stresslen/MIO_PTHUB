@@ -5,7 +5,7 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
-from app.services.scheduler_service import scheduler_service
+from app.services.scheduler_state_service import scheduler_state_service
 
 router = APIRouter(prefix="/scheduler", tags=["Scheduler"])
 
@@ -22,7 +22,7 @@ class SchedulerConfigRequest(BaseModel):
 
 @router.get("/status")
 def get_scheduler_status() -> Dict[str, Any]:
-    return scheduler_service.get_status()
+    return scheduler_state_service.get_status()
 
 
 @router.put("/config")
@@ -32,10 +32,10 @@ async def configure_scheduler(req: SchedulerConfigRequest) -> Dict[str, Any]:
         "hour": req.hour,
         "minute": req.minute,
     }
-    return {"success": True, "status": scheduler_service.configure(config)}
+    return {"success": True, "status": scheduler_state_service.configure(config)}
 
 
 @router.post("/toggle")
 async def toggle_scheduler(req: ToggleSchedulerRequest) -> Dict[str, Any]:
-    enabled = scheduler_service.toggle(req.enabled)
-    return {"success": True, "enabled": enabled, "status": scheduler_service.get_status()}
+    enabled = scheduler_state_service.toggle(req.enabled)
+    return {"success": True, "enabled": enabled, "status": scheduler_state_service.get_status()}

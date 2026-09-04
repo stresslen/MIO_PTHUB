@@ -5,11 +5,14 @@ import uuid
 from enum import Enum
 from typing import Literal, Optional, List
 from sqlalchemy import (
+    Boolean,
     Column,
+    DateTime,
+    Float,
+    Integer,
+    JSON,
     String,
     Text,
-    Integer,
-    DateTime,
 )
 from pydantic import BaseModel, Field
 from app.database import Base
@@ -21,6 +24,18 @@ class CrawlStatusEnum(str, Enum):
     SUCCESS = "SUCCESS"
     FAILED = "FAILED"
     PARTIAL = "PARTIAL"
+    INTERRUPTED = "INTERRUPTED"
+    PAUSED = "PAUSED"
+
+
+class CrawlJobStatusEnum(str, Enum):
+    QUEUED = "QUEUED"
+    RUNNING = "RUNNING"
+    PAUSED = "PAUSED"
+    SUCCESS = "SUCCESS"
+    PARTIAL = "PARTIAL"
+    FAILED = "FAILED"
+    INTERRUPTED = "INTERRUPTED"
 
 
 # ==========================================
@@ -43,6 +58,72 @@ class CrawlRun(Base):
     error_message = Column(Text, nullable=True)
 
 
+class CrawlJob(Base):
+    """Durable hand-off between the FE/API process and the crawl worker."""
+
+    __tablename__ = "crawl_jobs"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    source_id = Column(String(100), nullable=True, index=True)
+    trigger = Column(String(20), nullable=False, default="FE", index=True)
+    status = Column(
+        String(20), nullable=False, default=CrawlJobStatusEnum.QUEUED.value, index=True
+    )
+    timeframe = Column(String(20), nullable=False, default="1_week")
+    force_recrawl = Column(Boolean, nullable=False, default=False)
+    requested_at = Column(DateTime, nullable=False, default=datetime.datetime.utcnow, index=True)
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+    worker_id = Column(String(120), nullable=True)
+    result_json = Column(Text, nullable=True)
+    error_message = Column(Text, nullable=True)
+    dedupe_key = Column(String(160), nullable=True, unique=True)
+
+
+class SchedulerState(Base):
+    """Cross-process scheduler configuration, heartbeat and latest result."""
+
+    __tablename__ = "scheduler_state"
+
+    id = Column(Integer, primary_key=True, default=1)
+    enabled = Column(Boolean, nullable=False, default=True)
+    timezone = Column(String(64), nullable=False, default="Asia/Ho_Chi_Minh")
+    hour = Column(Integer, nullable=False, default=6)
+    minute = Column(Integer, nullable=False, default=0)
+    next_run_at = Column(DateTime, nullable=True)
+    last_run_at = Column(DateTime, nullable=True)
+    total_automated_runs = Column(Integer, nullable=False, default=0)
+    last_run_summary_json = Column(Text, nullable=True)
+    worker_heartbeat_at = Column(DateTime, nullable=True)
+    config_updated_at = Column(DateTime, nullable=False, default=datetime.datetime.utcnow)
+    config_dirty = Column(Boolean, nullable=False, default=False)
+    persistent_config_loaded = Column(Boolean, nullable=False, default=False)
+
+
+class CrawlerSourceItem(Base):
+    """Crawler source configuration and status table backed by SQLite."""
+
+    __tablename__ = "crawler_sources"
+
+    id = Column(String(100), primary_key=True, index=True)
+    name = Column(String(200), nullable=False)
+    description = Column(Text, nullable=True, default="")
+    seed_urls = Column(JSON, nullable=False, default=list)
+    adapter_mode = Column(String(50), nullable=False, default="specialized")
+    adapter_key = Column(String(100), nullable=False, default="")
+    crawl_scope = Column(String(50), nullable=False, default="configured")
+    rate_limit_delay = Column(Float, nullable=False, default=1.0)
+    timeout = Column(Integer, nullable=False, default=30)
+    enabled = Column(Boolean, nullable=False, default=True)
+    include_in_schedule = Column(Boolean, nullable=False, default=True)
+    status = Column(String(30), nullable=False, default="READY")
+    last_error = Column(Text, nullable=True, default="")
+    last_attempt_at = Column(String(50), nullable=True, default="")
+    last_success_at = Column(String(50), nullable=True, default="")
+    created_at = Column(String(50), nullable=True, default="")
+    updated_at = Column(String(50), nullable=True, default="")
+
+
 # ==========================================
 # Pydantic Schemas
 # ==========================================
@@ -61,6 +142,20 @@ class CrawlRunRead(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class CrawlJobRead(BaseModel):
+    id: str
+    source_id: Optional[str] = None
+    trigger: str
+    status: CrawlJobStatusEnum
+    timeframe: str
+    force_recrawl: bool
+    requested_at: datetime.datetime
+    started_at: Optional[datetime.datetime] = None
+    completed_at: Optional[datetime.datetime] = None
+    result: Optional[dict] = None
+    error_message: Optional[str] = None
 
 
 class SourceInfo(BaseModel):

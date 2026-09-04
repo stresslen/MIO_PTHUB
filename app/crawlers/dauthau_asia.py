@@ -157,7 +157,7 @@ class DauThauAsiaAdapter(SourceAdapter):
             or soup.find("div", class_=lambda c: c and any(k in c.lower() for k in ["tender-detail", "package-detail", "detail-content"]))
             or soup.find("body")
         )
-        body_text = clean_html(str(content_el)) if content_el else full_text
+        body_text = full_text
 
         # Preserve high-value procurement fields before truncating content for Gemini.
         # DauThau.info pages contain long menus before the actual tender details.
@@ -184,7 +184,7 @@ class DauThauAsiaAdapter(SourceAdapter):
             url=raw_doc.url,
             source_id=self.source_id,
             title=title,
-            raw_content=enriched_content[:5000],
+            raw_content=enriched_content,
             published_at=published_at,
             author=None,
             extra_metadata={},

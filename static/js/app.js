@@ -28,7 +28,15 @@ const state = {
     linkedinMaxPostsPerKeyword: 1000,
     isSavingLinkedInConfig: false,
     defaultPrompts: { scoring: '', sales: '' },
-    savingPromptType: null
+    savingPromptType: null,
+    activeCrawlJobIds: new Set(),
+    activeCrawl: {
+        job: null,
+        elapsedSeconds: 0,
+        timerInterval: null,
+        pollTimeout: null,
+        dismissedJobId: null
+    }
 };
 
 // ==========================================
@@ -128,6 +136,34 @@ const elements = {
     crawlTimeframeSelect: document.getElementById('crawl-timeframe-select'),
     crawlProgressBox: document.getElementById('crawl-progress-box'),
     crawlProgressText: document.getElementById('crawl-progress-text'),
+    crawlModalActiveNotice: document.getElementById('crawl-modal-active-notice'),
+    crawlModalNoticeTitle: document.getElementById('crawl-modal-notice-title'),
+    crawlModalNoticeDesc: document.getElementById('crawl-modal-notice-desc'),
+
+    // Crawl Status Banner
+    crawlStatusBanner: document.getElementById('crawl-status-banner'),
+    crawlBannerBadge: document.getElementById('crawl-banner-badge'),
+    crawlBannerTitle: document.getElementById('crawl-banner-title'),
+    crawlBannerTimer: document.getElementById('crawl-banner-timer'),
+    crawlBannerTimeframe: document.getElementById('crawl-banner-timeframe'),
+    crawlBannerTrigger: document.getElementById('crawl-banner-trigger'),
+    crawlBannerDetails: document.getElementById('crawl-banner-details'),
+    btnBannerRefresh: document.getElementById('btn-banner-refresh'),
+    btnCloseCrawlBanner: document.getElementById('btn-close-crawl-banner'),
+    btnPauseActiveCrawl: document.getElementById('btn-pause-active-crawl'),
+    btnResumeActiveCrawl: document.getElementById('btn-resume-active-crawl'),
+    btnStopActiveCrawl: document.getElementById('btn-stop-active-crawl') || document.getElementById('btn-pause-active-crawl'),
+    btnDeleteActiveCrawl: document.getElementById('btn-delete-active-crawl'),
+    btnResumeRecentCrawl: document.getElementById('btn-resume-recent-crawl'),
+    btnToggleQueueList: document.getElementById('btn-toggle-queue-list'),
+    queueCountLabel: document.getElementById('queue-count-label'),
+    crawlQueuePanel: document.getElementById('crawl-queue-panel'),
+    badgeQueuedCount: document.getElementById('badge-queued-count'),
+    btnPauseAllQueue: document.getElementById('btn-pause-all-queue'),
+    labelPauseAllQueue: document.getElementById('label-pause-all-queue'),
+    btnClearCrawlQueue: document.getElementById('btn-clear-crawl-queue'),
+    crawlQueueList: document.getElementById('crawl-queue-list'),
+
     // Scheduler Card
     btnToggleScheduler: document.getElementById('btn-toggle-scheduler'),
     schStatusText: document.getElementById('sch-status-text'),
@@ -196,6 +232,7 @@ function switchTab(pageId, updateUrl = true) {
     });
 
     // Load page-specific data
+    checkActiveCrawlStatus();
     if (pageId === 'page-leads') {
         loadLeads();
         if (state.sources.length === 0) loadSources();
@@ -573,7 +610,7 @@ async function openLeadModal(lead) {
         const response = await fetch('/api/leads/' + encodeURIComponent(lead.id));
         if (response.ok) lead = await response.json();
     } catch (error) {
-        console.warn('Không tải được Company Profile chi tiết:', error);
+        console.warn('Không tải được thông tin bổ sung:', error);
     }
 
     const profile = lead.company_profile || null;
@@ -625,6 +662,25 @@ async function openLeadModal(lead) {
         createDetailItem('Ngày xuất bản', formatDate(lead.published_at)),
         createDetailItem('Hạn nộp hồ sơ / Tiếp cận', formatDate(lead.deadline))
     );
+    const isTechnicalEnrichmentMessage = value => {
+        const text = String(value || "").toLowerCase();
+        return text.includes("discovery_failed") ||
+            text.includes("crawl vòng 2") ||
+            text.includes("xah không trả") ||
+            text.includes("httpsconnectionpool") ||
+            text.includes("read timed out");
+    };
+    const mergedProfileItems = [
+        ["Ngành hoạt động", profile?.industry],
+        ["Quy mô", profile?.size],
+        ["Nhân sự", profile?.employee_count],
+        ["Địa điểm hồ sơ", Array.isArray(profile?.locations) ? profile.locations.join(", ") : profile?.locations],
+        ["Công nghệ", Array.isArray(profile?.technologies) ? profile.technologies.join(", ") : profile?.technologies],
+        ["Website chính thức", profile?.official_url]
+    ].filter(([, value]) => String(value || "").trim() && !isTechnicalEnrichmentMessage(value));
+    if (mergedProfileItems.length) {
+        overviewGrid.append(...mergedProfileItems.map(([label, value]) => createDetailItem(label, value)));
+    }
     overview.appendChild(overviewGrid);
     modalBody.appendChild(overview);
 
@@ -687,75 +743,6 @@ async function openLeadModal(lead) {
     }
     modalBody.appendChild(evidenceSection);
 
-    if (profile || lead.enrichment_status) {
-        const profileSection = document.createElement('section');
-        profileSection.className = 'detail-section';
-        profileSection.appendChild(createHeading('Hồ sơ tổ chức · Crawl vòng 2'));
-        const profileGrid = document.createElement('div');
-        profileGrid.className = 'detail-grid';
-        profileGrid.append(
-            createDetailItem('Trạng thái', profile?.profile_status || lead.enrichment_status),
-            createDetailItem('Ngành', profile?.industry),
-            createDetailItem('Quy mô', profile?.size),
-            createDetailItem('Nhân sự', profile?.employee_count),
-            createDetailItem('Địa điểm', Array.isArray(profile?.locations) ? profile.locations.join(', ') : profile?.locations),
-            createDetailItem('Công nghệ công bố', Array.isArray(profile?.technologies) ? profile.technologies.join(', ') : profile?.technologies)
-        );
-        profileSection.appendChild(profileGrid);
-
-        if (contacts.length) {
-            profileSection.appendChild(createHeading('Đầu mối bổ sung từ hồ sơ tổ chức'));
-            const contactList = document.createElement('div');
-            contactList.className = 'profile-contact-list';
-            contacts.forEach(contact => {
-                const card = document.createElement('article');
-                card.className = 'profile-contact-card';
-                const title = document.createElement('div');
-                title.className = 'profile-contact-title';
-                title.textContent = [contact.full_name, contact.raw_title || contact.role_group]
-                    .filter(Boolean).join(' · ') || 'Đầu mối công khai';
-                card.appendChild(title);
-
-                const meta = document.createElement('div');
-                meta.className = 'profile-contact-meta';
-                [
-                    contact.email ? 'Email: ' + contact.email : '',
-                    contact.phone ? 'SĐT: ' + contact.phone : '',
-                    Number.isFinite(contact.decision_score)
-                        ? 'Khả năng quyết định: ' + contact.decision_score + '/100'
-                        : ''
-                ].filter(Boolean).forEach(value => {
-                    const item = document.createElement('span');
-                    item.textContent = value;
-                    meta.appendChild(item);
-                });
-                if (meta.childNodes.length) card.appendChild(meta);
-
-                if (contact.evidence_text || contact.decision_reason) {
-                    const contactEvidence = document.createElement('p');
-                    contactEvidence.className = 'profile-contact-evidence';
-                    contactEvidence.textContent = contact.evidence_text || contact.decision_reason;
-                    card.appendChild(contactEvidence);
-                }
-                contactList.appendChild(card);
-            });
-            profileSection.appendChild(contactList);
-        }
-
-        const incomplete = Array.isArray(profile?.missing_information)
-            ? profile.missing_information
-            : [];
-        if (incomplete.length || lead.enrichment_message || profile?.error_message) {
-            const note = document.createElement('div');
-            note.className = 'detail-empty-note';
-            note.textContent = [
-                incomplete.length ? 'Chưa tìm thấy: ' + incomplete.join(', ') : '',
-                lead.enrichment_message || profile?.error_message || ''
-            ].filter(Boolean).join(' · ');
-            profileSection.appendChild(note);
-        }
-        modalBody.appendChild(profileSection);
-    }
     if (lead.source_url) {
         const sourceFooter = document.createElement('section');
         sourceFooter.className = 'detail-source-footer';
@@ -881,6 +868,7 @@ function renderSourcesGrid() {
         titleGroup.className = 'source-title-group';
 
         const sDot = document.createElement('span');
+        const crawlBusy = ["QUEUED", "RUNNING"].includes(src.status);
         const sourceReady = src.enabled && !['NEEDS_ADAPTER', 'ERROR', 'BLOCKED'].includes(src.status);
         sDot.className = 'status-dot ' + (sourceReady ? 'online' : 'offline');
         titleGroup.appendChild(sDot);
@@ -978,8 +966,12 @@ function renderSourcesGrid() {
 
         const runBtn = document.createElement('button');
         runBtn.className = 'btn btn-xs btn-outline';
-        runBtn.textContent = src.enabled ? 'Thu thập nguồn này' : 'Cần cập nhật sau';
-        runBtn.disabled = !src.enabled;
+        runBtn.textContent = !src.enabled
+            ? "Cần cập nhật sau"
+            : src.status === "RUNNING"
+                ? "Đang thu thập"
+                : crawlBusy ? "Đang chờ worker" : "Thu thập nguồn này";
+        runBtn.disabled = !src.enabled || crawlBusy;
         runBtn.addEventListener('click', () => {
             elements.crawlSourceSelect.value = src.id;
             elements.crawlModal.classList.remove('hidden');
@@ -1063,7 +1055,7 @@ async function saveSources(event) {
                 'info'
             );
         } else if ((data.added || 0) > 0) {
-            showToast('Đã lưu và kiểm tra nguồn “' + name + '”.', 'success');
+            showToast('Đã lưu “' + name + '” và xếp lệnh kiểm tra cho crawl worker.', 'success');
         } else {
             showToast('URL này đã tồn tại trong danh sách nguồn.', 'info');
         }
@@ -1249,8 +1241,585 @@ async function saveKeywords(event) {
 }
 
 // ==========================================
-// Crawl Trigger Execution
+// Crawl Monitoring & Status Banner
 // ==========================================
+function wait(milliseconds) {
+    return new Promise(resolve => window.setTimeout(resolve, milliseconds));
+}
+
+function formatSeconds(seconds) {
+    const s = Math.max(0, Math.floor(seconds || 0));
+    const mins = Math.floor(s / 60);
+    const secs = s % 60;
+    return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+}
+
+function formatFriendlyTime(isoStr) {
+    if (!isoStr) return '';
+    try {
+        let parseable = isoStr;
+        // If naive ISO string (no Z or +/- offset), treat as UTC
+        if (!parseable.includes('Z') && !parseable.includes('+') && !/(-\d\d:\d\d)$/.test(parseable)) {
+            parseable += 'Z';
+        }
+        const d = new Date(parseable);
+        if (isNaN(d.getTime())) return '';
+        const now = new Date();
+        const diffMs = now.getTime() - d.getTime();
+        const diffMins = Math.floor(diffMs / 60000);
+
+        if (diffMins < 1 && diffMins >= 0) return 'Vừa gửi';
+        if (diffMins < 60 && diffMins >= 1) return `${diffMins} phút trước`;
+
+        const vnFormatter = new Intl.DateTimeFormat('vi-VN', {
+            timeZone: 'Asia/Ho_Chi_Minh',
+            hour: '2-digit',
+            minute: '2-digit',
+            day: '2-digit',
+            month: '2-digit',
+            year: 'numeric',
+            hour12: false
+        });
+        const parts = Object.fromEntries(
+            vnFormatter.formatToParts(d).map(p => [p.type, p.value])
+        );
+        const timeStr = `${parts.hour}:${parts.minute}`;
+
+        const nowParts = Object.fromEntries(
+            vnFormatter.formatToParts(now).map(p => [p.type, p.value])
+        );
+        const isToday = (parts.day === nowParts.day && parts.month === nowParts.month && parts.year === nowParts.year);
+
+        if (isToday) return `Gửi lúc ${timeStr} hôm nay`;
+        return `Gửi lúc ${timeStr} ${parts.day}/${parts.month}`;
+    } catch (_) {
+        return '';
+    }
+}
+
+function updateCrawlModalNotice() {
+    if (!elements.crawlModalActiveNotice) return;
+    const current = state.activeCrawl.job;
+    if (current && ['QUEUED', 'RUNNING'].includes(current.status)) {
+        elements.crawlModalActiveNotice.classList.remove('hidden');
+        if (elements.crawlModalNoticeTitle) {
+            elements.crawlModalNoticeTitle.textContent = current.status === 'RUNNING'
+                ? `Đang có luồng crawl chạy: ${current.source_name}`
+                : `Có luồng đang chờ: ${current.source_name}`;
+        }
+        if (elements.crawlModalNoticeDesc) {
+            const timeInfo = current.timeframe_label || current.timeframe || '7 ngày qua';
+            const trigInfo = current.trigger_label || current.trigger || 'Thủ công';
+            elements.crawlModalNoticeDesc.textContent = `Phạm vi ${timeInfo} (${trigInfo}). Yêu cầu mới của bạn sẽ được xếp vào hàng đợi.`;
+        }
+    } else {
+        elements.crawlModalActiveNotice.classList.add('hidden');
+    }
+}
+
+function dismissCrawlBanner() {
+    if (!elements.crawlStatusBanner) return;
+    elements.crawlStatusBanner.classList.add('hidden');
+    if (state.activeCrawl.job && state.activeCrawl.job.id) {
+        state.activeCrawl.dismissedJobId = state.activeCrawl.job.id;
+    }
+}
+
+function renderQueuedJobs(queuedJobs) {
+    if (!elements.crawlQueueList || !elements.btnToggleQueueList) return;
+
+    const count = (queuedJobs && Array.isArray(queuedJobs)) ? queuedJobs.length : 0;
+
+    if (count === 0) {
+        elements.btnToggleQueueList.classList.add('hidden');
+        if (elements.crawlQueuePanel) elements.crawlQueuePanel.classList.add('hidden');
+        return;
+    }
+
+    elements.btnToggleQueueList.classList.remove('hidden');
+    if (elements.queueCountLabel) {
+        elements.queueCountLabel.textContent = `${count} lệnh đang chờ`;
+    }
+    if (elements.badgeQueuedCount) {
+        elements.badgeQueuedCount.textContent = `${count} yêu cầu`;
+    }
+
+    const allPaused = count > 0 && queuedJobs.every(j => j.status === 'PAUSED');
+    state.activeCrawl.allPaused = allPaused;
+    if (elements.labelPauseAllQueue) {
+        elements.labelPauseAllQueue.textContent = allPaused ? 'Tiếp tục tất cả' : 'Tạm dừng tất cả';
+    }
+
+    elements.crawlQueueList.replaceChildren();
+
+    queuedJobs.forEach((job, index) => {
+        const item = document.createElement('div');
+        item.className = 'crawl-queue-item';
+
+        const mainDiv = document.createElement('div');
+        mainDiv.className = 'crawl-queue-item-main';
+
+        const orderBadge = document.createElement('span');
+        orderBadge.className = 'crawl-queue-order-badge' + (index === 0 ? ' is-next' : '');
+        orderBadge.textContent = index === 0 ? '#1 (Kế tiếp)' : `#${index + 1}`;
+        mainDiv.appendChild(orderBadge);
+
+        const infoDiv = document.createElement('div');
+        infoDiv.className = 'crawl-queue-item-info';
+
+        const nameDiv = document.createElement('div');
+        nameDiv.className = 'crawl-queue-item-name';
+        nameDiv.textContent = job.source_name || 'Tất cả các nguồn dữ liệu';
+        infoDiv.appendChild(nameDiv);
+
+        const metaDiv = document.createElement('div');
+        metaDiv.className = 'crawl-queue-item-meta';
+
+        const tfSpan = document.createElement('span');
+        tfSpan.textContent = `Phạm vi: ${job.timeframe_label || '24 giờ qua'}`;
+        metaDiv.appendChild(tfSpan);
+
+        const dot1 = document.createElement('span');
+        dot1.textContent = '·';
+        metaDiv.appendChild(dot1);
+
+        const trigSpan = document.createElement('span');
+        trigSpan.textContent = job.trigger_label || 'Thủ công';
+        metaDiv.appendChild(trigSpan);
+
+        if (job.requested_at) {
+            const timeText = formatFriendlyTime(job.requested_at);
+            if (timeText) {
+                const dot2 = document.createElement('span');
+                dot2.textContent = '·';
+                metaDiv.appendChild(dot2);
+
+                const timeSpan = document.createElement('span');
+                timeSpan.textContent = timeText;
+                metaDiv.appendChild(timeSpan);
+            }
+        }
+
+        infoDiv.appendChild(metaDiv);
+        mainDiv.appendChild(infoDiv);
+        item.appendChild(mainDiv);
+
+        const sideDiv = document.createElement('div');
+        sideDiv.className = 'crawl-queue-item-side';
+
+        const isPaused = job.status === 'PAUSED';
+        const statusTag = document.createElement('span');
+        statusTag.className = 'crawl-queue-status-tag ' + (isPaused ? 'is-paused' : 'is-queued');
+        statusTag.textContent = isPaused ? 'Tạm dừng' : 'Chờ lượt';
+        sideDiv.appendChild(statusTag);
+
+        const actionsDiv = document.createElement('div');
+        actionsDiv.className = 'crawl-queue-item-actions';
+
+        // 1. Pause / Resume Button
+        const btnPauseResume = document.createElement('button');
+        btnPauseResume.type = 'button';
+        btnPauseResume.className = 'btn-item-action' + (isPaused ? ' is-resume' : '');
+        btnPauseResume.title = isPaused ? 'Tiếp tục lệnh này' : 'Tạm dừng lệnh này';
+        btnPauseResume.innerHTML = isPaused
+            ? `<svg viewBox="0 0 24 24" style="width:12px;height:12px;stroke:currentColor;fill:none;stroke-width:2;"><polygon points="5 3 19 12 5 21 5 3"/></svg>`
+            : `<svg viewBox="0 0 24 24" style="width:12px;height:12px;fill:currentColor;"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>`;
+        btnPauseResume.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            try {
+                const endpoint = isPaused ? `/api/crawl/jobs/${job.id}/resume` : `/api/crawl/jobs/${job.id}/pause`;
+                const res = await fetch(endpoint, { method: 'POST' });
+                if (res.ok) {
+                    showToast(isPaused ? 'Đã tiếp tục lệnh' : 'Đã tạm dừng lệnh', 'info');
+                    pollActiveCrawlStatus();
+                } else {
+                    showToast('Không thể cập nhật lệnh', 'error');
+                }
+            } catch (_) {
+                showToast('Lỗi kết nối', 'error');
+            }
+        });
+        actionsDiv.appendChild(btnPauseResume);
+
+        // 2. Promote to front (if not first)
+        if (index > 0) {
+            const btnPromote = document.createElement('button');
+            btnPromote.type = 'button';
+            btnPromote.className = 'btn-item-action is-run';
+            btnPromote.title = 'Chạy lệnh này trước (Ưu tiên)';
+            btnPromote.innerHTML = `<svg viewBox="0 0 24 24" style="width:12px;height:12px;fill:currentColor;"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>`;
+            btnPromote.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                try {
+                    const res = await fetch(`/api/crawl/jobs/${job.id}/promote`, { method: 'POST' });
+                    if (res.ok) {
+                        showToast('Đã đưa lệnh lên vị trí kế tiếp', 'info');
+                        pollActiveCrawlStatus();
+                    } else {
+                        showToast('Không thể đẩy lệnh lên', 'error');
+                    }
+                } catch (_) {
+                    showToast('Lỗi kết nối', 'error');
+                }
+            });
+            actionsDiv.appendChild(btnPromote);
+        }
+
+        // 3. Delete single job
+        const btnDelete = document.createElement('button');
+        btnDelete.type = 'button';
+        btnDelete.className = 'btn-item-action is-delete';
+        btnDelete.title = 'Xóa lệnh này';
+        btnDelete.innerHTML = `<svg viewBox="0 0 24 24" style="width:12px;height:12px;stroke:currentColor;fill:none;stroke-width:2;"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>`;
+        btnDelete.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            if (!confirm(`Bạn có chắc muốn xóa lệnh "${job.source_name || 'Tất cả các nguồn'}" khỏi hàng đợi?`)) return;
+            try {
+                const res = await fetch(`/api/crawl/jobs/${job.id}`, { method: 'DELETE' });
+                if (res.ok) {
+                    showToast('Đã xóa lệnh khỏi hàng đợi', 'info');
+                    pollActiveCrawlStatus();
+                } else {
+                    showToast('Không thể xóa lệnh', 'error');
+                }
+            } catch (_) {
+                showToast('Lỗi kết nối', 'error');
+            }
+        });
+        actionsDiv.appendChild(btnDelete);
+
+        sideDiv.appendChild(actionsDiv);
+        item.appendChild(sideDiv);
+
+        elements.crawlQueueList.appendChild(item);
+    });
+}
+
+function renderCrawlStatusBanner(activeJob, recentJob, queueDepth, queuedJobs) {
+    if (!elements.crawlStatusBanner) return;
+
+    // Render queued jobs panel & button
+    renderQueuedJobs(queuedJobs);
+
+    if (activeJob && ['QUEUED', 'RUNNING', 'PAUSED'].includes(activeJob.status)) {
+        state.activeCrawl.job = activeJob;
+        const isQueued = activeJob.status === 'QUEUED';
+        const isPaused = activeJob.status === 'PAUSED';
+
+        elements.crawlStatusBanner.className = 'crawl-status-banner' + (isPaused ? ' is-paused' : (isQueued ? ' is-queued' : ''));
+        elements.crawlStatusBanner.classList.remove('hidden');
+
+        if (elements.crawlBannerBadge) {
+            elements.crawlBannerBadge.textContent = isPaused ? 'Tạm dừng' : (isQueued ? 'Chờ worker' : 'Đang thu thập');
+        }
+
+        if (elements.crawlBannerTitle) {
+            elements.crawlBannerTitle.textContent = activeJob.source_name || 'Tất cả các nguồn dữ liệu';
+            elements.crawlBannerTitle.title = activeJob.source_name || '';
+        }
+
+        if (elements.crawlBannerTimeframe) {
+            const tf = activeJob.timeframe_label || activeJob.timeframe || '7 ngày qua';
+            elements.crawlBannerTimeframe.textContent = `Khoảng: ${tf}`;
+        }
+
+        if (elements.crawlBannerTrigger) {
+            const tr = activeJob.trigger_label || activeJob.trigger || 'Thủ công';
+            elements.crawlBannerTrigger.textContent = `Hình thức: ${tr}`;
+        }
+
+        if (elements.crawlBannerDetails) {
+            if (isPaused) {
+                elements.crawlBannerDetails.textContent = 'Tiến trình cào đang tạm dừng; dữ liệu đã quét được bảo toàn 100%. Bấm "Tiếp tục chạy" để cào tiếp.';
+            } else if (isQueued) {
+                elements.crawlBannerDetails.textContent = 'Đang xếp hàng chờ đến lượt xử lý...';
+            } else if (activeJob.active_runs && activeJob.active_runs.length > 0) {
+                const runNames = activeJob.active_runs.map(r => r.source_name).filter(Boolean).join(', ');
+                const totalLeads = activeJob.active_runs.reduce((acc, r) => acc + (r.new_leads || 0), 0);
+                elements.crawlBannerDetails.textContent = `Đang xử lý: ${runNames}${totalLeads > 0 ? ` · Đã tìm thấy +${totalLeads} cơ hội` : ''}`;
+            } else {
+                elements.crawlBannerDetails.textContent = 'Đang thu thập và phân tích dữ liệu...';
+            }
+        }
+
+        if (elements.crawlBannerTimer) {
+            if (isPaused) {
+                elements.crawlBannerTimer.textContent = `⏱️ ${formatSeconds(state.activeCrawl.elapsedSeconds)} (Tạm dừng)`;
+            } else {
+                elements.crawlBannerTimer.textContent = `⏱️ ${formatSeconds(state.activeCrawl.elapsedSeconds)}`;
+            }
+        }
+
+        if (elements.btnBannerRefresh) {
+            elements.btnBannerRefresh.classList.add('hidden');
+        }
+        if (elements.btnPauseActiveCrawl) {
+            elements.btnPauseActiveCrawl.classList.toggle('hidden', isPaused || isQueued);
+        }
+        if (elements.btnResumeActiveCrawl) {
+            elements.btnResumeActiveCrawl.classList.toggle('hidden', !isPaused);
+        }
+        if (elements.btnStopActiveCrawl && !elements.btnPauseActiveCrawl) {
+            elements.btnStopActiveCrawl.classList.toggle('hidden', isPaused || isQueued);
+        }
+        if (elements.btnDeleteActiveCrawl) {
+            elements.btnDeleteActiveCrawl.classList.remove('hidden');
+        }
+        if (elements.btnResumeRecentCrawl) {
+            elements.btnResumeRecentCrawl.classList.add('hidden');
+        }
+
+        updateCrawlModalNotice();
+        return;
+    }
+
+    // No active job
+    updateCrawlModalNotice();
+
+    // Check recent completed job (within 90 seconds, and not explicitly dismissed)
+    if (
+        recentJob &&
+        recentJob.id &&
+        recentJob.id !== state.activeCrawl.dismissedJobId &&
+        recentJob.completed_seconds_ago !== undefined &&
+        recentJob.completed_seconds_ago < (recentJob.status === 'INTERRUPTED' ? 300 : 90)
+    ) {
+        state.activeCrawl.job = recentJob;
+        const isSuccess = recentJob.status === 'SUCCESS';
+        const isPartial = recentJob.status === 'PARTIAL';
+        const isInterrupted = recentJob.status === 'INTERRUPTED';
+
+        elements.crawlStatusBanner.className = 'crawl-status-banner ' + (isSuccess || isPartial ? 'is-success' : (isInterrupted ? 'is-queued' : 'is-failed'));
+        elements.crawlStatusBanner.classList.remove('hidden');
+
+        if (elements.crawlBannerBadge) {
+            elements.crawlBannerBadge.textContent = isSuccess ? 'Hoàn tất' : (isPartial ? 'Xong 1 phần' : (isInterrupted ? 'Đã dừng' : 'Thất bại'));
+        }
+
+        if (elements.crawlBannerTitle) {
+            const prefix = isInterrupted ? 'Đã dừng' : (isSuccess || isPartial ? 'Hoàn tất' : 'Thất bại');
+            elements.crawlBannerTitle.textContent = `${prefix}: ${recentJob.source_name || 'Thu thập dữ liệu'}`;
+        }
+
+        if (elements.crawlBannerTimeframe) {
+            const tf = recentJob.timeframe_label || recentJob.timeframe || '7 ngày qua';
+            elements.crawlBannerTimeframe.textContent = `Khoảng: ${tf}`;
+        }
+
+        if (elements.crawlBannerTrigger) {
+            const tr = recentJob.trigger_label || recentJob.trigger || 'Thủ công';
+            elements.crawlBannerTrigger.textContent = `Hình thức: ${tr}`;
+        }
+
+        if (elements.crawlBannerDetails) {
+            if (isInterrupted) {
+                elements.crawlBannerDetails.textContent = 'Phiên cào dữ liệu đã được dừng lại. Bạn có thể bấm nút "Tiếp tục chạy lại" ở bên phải.';
+            } else {
+                const res = recentJob.result || {};
+                const leads = res.new_leads || 0;
+                const errs = res.error_count || 0;
+                elements.crawlBannerDetails.textContent = `Đã hoàn thành phiên cào dữ liệu · +${leads} cơ hội mới${errs > 0 ? ` · ${errs} lỗi` : ''}`;
+            }
+        }
+
+        if (elements.crawlBannerTimer) {
+            elements.crawlBannerTimer.textContent = 'Vừa xong';
+        }
+
+        if (elements.btnBannerRefresh) {
+            elements.btnBannerRefresh.classList.remove('hidden');
+        }
+        if (elements.btnStopActiveCrawl) {
+            elements.btnStopActiveCrawl.classList.add('hidden');
+        }
+        if (elements.btnDeleteActiveCrawl) {
+            elements.btnDeleteActiveCrawl.classList.add('hidden');
+        }
+        if (elements.btnResumeRecentCrawl) {
+            const canResume = ['INTERRUPTED', 'FAILED'].includes(recentJob.status);
+            elements.btnResumeRecentCrawl.classList.toggle('hidden', !canResume);
+        }
+
+        return;
+    }
+
+    // If no active job and no recent job, but there are queued jobs:
+    if (queuedJobs && queuedJobs.length > 0) {
+        elements.crawlStatusBanner.className = 'crawl-status-banner is-queued';
+        elements.crawlStatusBanner.classList.remove('hidden');
+
+        if (elements.crawlBannerBadge) {
+            elements.crawlBannerBadge.textContent = 'Hàng đợi';
+        }
+        if (elements.crawlBannerTitle) {
+            elements.crawlBannerTitle.textContent = `${queuedJobs.length} yêu cầu đang chờ xử lý`;
+        }
+        if (elements.crawlBannerTimeframe) {
+            elements.crawlBannerTimeframe.textContent = `Kế tiếp: ${queuedJobs[0].source_name}`;
+        }
+        if (elements.crawlBannerTrigger) {
+            elements.crawlBannerTrigger.textContent = `Hình thức: ${queuedJobs[0].trigger_label || 'Thủ công'}`;
+        }
+        if (elements.crawlBannerDetails) {
+            elements.crawlBannerDetails.textContent = 'Các yêu cầu đang xếp hàng chờ crawl worker tiếp nhận...';
+        }
+        if (elements.crawlBannerTimer) {
+            elements.crawlBannerTimer.textContent = 'Chờ lượt';
+        }
+        if (elements.btnBannerRefresh) {
+            elements.btnBannerRefresh.classList.add('hidden');
+        }
+        if (elements.btnStopActiveCrawl) {
+            elements.btnStopActiveCrawl.classList.add('hidden');
+        }
+        if (elements.btnDeleteActiveCrawl) {
+            elements.btnDeleteActiveCrawl.classList.add('hidden');
+        }
+        if (elements.btnResumeRecentCrawl) {
+            elements.btnResumeRecentCrawl.classList.add('hidden');
+        }
+        return;
+    }
+
+    // Otherwise hide banner
+    state.activeCrawl.job = null;
+    elements.crawlStatusBanner.classList.add('hidden');
+    if (elements.btnStopActiveCrawl) elements.btnStopActiveCrawl.classList.add('hidden');
+    if (elements.btnDeleteActiveCrawl) elements.btnDeleteActiveCrawl.classList.add('hidden');
+    if (elements.btnResumeRecentCrawl) elements.btnResumeRecentCrawl.classList.add('hidden');
+    if (elements.btnBannerRefresh) {
+        elements.btnBannerRefresh.classList.add('hidden');
+    }
+}
+
+async function checkActiveCrawlStatus() {
+    try {
+        const res = await fetch('/api/crawl/active', {
+            headers: { 'Cache-Control': 'no-cache' }
+        });
+        if (!res.ok) return null;
+        const data = await res.json();
+        const activeJob = data.has_active ? data.active_job : null;
+        const wasActive = state.activeCrawl.job && ['QUEUED', 'RUNNING'].includes(state.activeCrawl.job.status);
+
+        if (activeJob) {
+            state.activeCrawl.job = activeJob;
+            state.activeCrawl.elapsedSeconds = activeJob.elapsed_seconds || 0;
+            if (!state.activeCrawl.timerInterval) {
+                state.activeCrawl.timerInterval = window.setInterval(() => {
+                    state.activeCrawl.elapsedSeconds += 1;
+                    if (elements.crawlBannerTimer && state.activeCrawl.job && state.activeCrawl.job.status === 'RUNNING') {
+                        elements.crawlBannerTimer.textContent = `⏱️ ${formatSeconds(state.activeCrawl.elapsedSeconds)}`;
+                    }
+                }, 1000);
+            }
+        } else {
+            if (state.activeCrawl.timerInterval) {
+                window.clearInterval(state.activeCrawl.timerInterval);
+                state.activeCrawl.timerInterval = null;
+            }
+            if (wasActive) {
+                if (state.currentPage === 'page-leads') {
+                    loadLeads();
+                } else if (state.currentPage === 'page-crawlers') {
+                    loadSources();
+                }
+            }
+        }
+
+        renderCrawlStatusBanner(activeJob, data.recent_job, data.queue_depth, data.queued_jobs);
+        return data;
+    } catch (_) {
+        return null;
+    }
+}
+
+function pollActiveCrawlStatus() {
+    return checkActiveCrawlStatus();
+}
+
+function startActiveCrawlMonitoring() {
+    if (state.activeCrawl.pollTimeout) {
+        window.clearTimeout(state.activeCrawl.pollTimeout);
+        state.activeCrawl.pollTimeout = null;
+    }
+
+    const poll = async () => {
+        const data = await checkActiveCrawlStatus();
+        const interval = (data && (data.has_active || data.queue_depth > 0)) ? 3000 : 5000;
+        state.activeCrawl.pollTimeout = window.setTimeout(poll, interval);
+    };
+
+    poll();
+}
+
+async function monitorCrawlJob(jobId) {
+    if (!jobId || state.activeCrawlJobIds.has(jobId)) return;
+    state.activeCrawlJobIds.add(jobId);
+    let consecutiveErrors = 0;
+    try {
+        while (state.activeCrawlJobIds.has(jobId)) {
+            await wait(3500);
+            try {
+                const response = await fetch('/api/crawl/jobs/' + encodeURIComponent(jobId), {
+                    headers: { 'Cache-Control': 'no-cache' }
+                });
+                if (response.status === 404) {
+                    state.activeCrawlJobIds.delete(jobId);
+                    checkActiveCrawlStatus();
+                    break;
+                }
+                if (!response.ok) throw new Error('Không đọc được trạng thái job');
+                const job = await response.json();
+                consecutiveErrors = 0;
+
+                // Refresh the banner with latest status
+                checkActiveCrawlStatus();
+
+                if (!['SUCCESS', 'PARTIAL', 'FAILED', 'INTERRUPTED'].includes(job.status)) {
+                    continue;
+                }
+
+                state.activeCrawlJobIds.delete(jobId);
+
+                const result = job.result || {};
+                if (job.status === 'SUCCESS') {
+                    showToast(
+                        'Thu thập hoàn tất: ' + (result.total_discovered || 0) +
+                        ' liên kết, thêm ' + (result.new_leads || 0) + ' cơ hội mới.',
+                        'success'
+                    );
+                } else if (job.status === 'PARTIAL') {
+                    showToast(
+                        'Thu thập đã xong một phần; có ' + (result.error_count || 0) +
+                        ' lỗi cần kiểm tra.',
+                        'warning'
+                    );
+                } else if (job.status === 'INTERRUPTED') {
+                    showToast('Đã dừng luồng thu thập.', 'info');
+                } else {
+                    showToast(job.error_message || 'Job thu thập không hoàn tất.', 'error');
+                }
+                if (state.currentPage === 'page-leads') {
+                    state.leads.page = 1;
+                    loadLeads();
+                } else if (state.currentPage === 'page-crawlers') {
+                    loadSources();
+                }
+                return;
+            } catch (error) {
+                consecutiveErrors += 1;
+                if (consecutiveErrors >= 3) {
+                    showToast('Job vẫn chạy nhưng tạm mất kết nối cập nhật trạng thái.', 'info');
+                    return;
+                }
+            }
+        }
+    } finally {
+        state.activeCrawlJobIds.delete(jobId);
+    }
+}
+
 async function executeCrawl() {
     const sourceId = elements.crawlSourceSelect.value || null;
     const timeframe = elements.crawlTimeframeSelect ? elements.crawlTimeframeSelect.value : '1_week';
@@ -1259,7 +1828,7 @@ async function executeCrawl() {
     elements.btnStartCrawl.disabled = true;
     elements.btnCancelCrawl.disabled = true;
     elements.crawlProgressBox.classList.remove('hidden');
-    elements.crawlProgressText.textContent = `Đang thu thập từ ${sourceId || 'All'} · ${timeframe}...`;
+    elements.crawlProgressText.textContent = "Đang gửi lệnh sang crawl worker…";
 
     try {
         const payload = {
@@ -1276,27 +1845,18 @@ async function executeCrawl() {
 
         if (!res.ok) throw new Error('Yêu cầu crawl không thành công');
 
-        const runs = await res.json();
-        if (runs.length === 0) {
-            showToast('Đã bắt đầu thu thập dữ liệu trong nền.', 'success');
-        } else {
-            let totalNew = 0;
-            let totalDisc = 0;
-            runs.forEach(r => {
-                totalNew += r.new_leads || 0;
-                totalDisc += r.total_discovered || 0;
-            });
-            showToast(`Hoàn tất: ${totalDisc} liên kết, thêm ${totalNew} cơ hội mới.`, 'success');
-        }
-        elements.crawlModal.classList.add('hidden');
+        const job = await res.json();
+        showToast(
+            "Đã xếp lệnh thu thập " + (sourceId || "tất cả nguồn") +
+            ". Bạn có thể tiếp tục thao tác.",
+            "success"
+        );
+        elements.crawlModal.classList.add("hidden");
+        if (state.currentPage === 'page-crawlers') loadSources();
 
-        // Refresh currently active page
-        if (state.currentPage === 'page-leads') {
-            state.leads.page = 1;
-            loadLeads();
-            } else if (state.currentPage === 'page-crawlers') {
-            loadSources();
-            }
+        // Immediately update active status banner
+        checkActiveCrawlStatus();
+        monitorCrawlJob(job.id);
     } catch (err) {
         showToast(`Lỗi: ${err.message}`, 'error');
     } finally {
@@ -1498,7 +2058,10 @@ function initEvents() {
 
     // Crawl Trigger Modal
     elements.btnTriggerCrawlButtons.forEach(btn => {
-        btn.addEventListener('click', () => elements.crawlModal.classList.remove('hidden'));
+        btn.addEventListener('click', () => {
+            updateCrawlModalNotice();
+            elements.crawlModal.classList.remove('hidden');
+        });
     });
     elements.btnCloseCrawlModal.addEventListener('click', () => elements.crawlModal.classList.add('hidden'));
     elements.btnCancelCrawl.addEventListener('click', () => elements.crawlModal.classList.add('hidden'));
@@ -1506,6 +2069,149 @@ function initEvents() {
         if (e.target === elements.crawlModal) elements.crawlModal.classList.add('hidden');
     });
     elements.btnStartCrawl.addEventListener('click', executeCrawl);
+
+    if (elements.btnCloseCrawlBanner) {
+        elements.btnCloseCrawlBanner.addEventListener('click', dismissCrawlBanner);
+    }
+    if (elements.btnToggleQueueList) {
+        elements.btnToggleQueueList.addEventListener('click', () => {
+            if (!elements.crawlQueuePanel) return;
+            const isHidden = elements.crawlQueuePanel.classList.toggle('hidden');
+            elements.btnToggleQueueList.classList.toggle('is-active', !isHidden);
+            elements.btnToggleQueueList.setAttribute('aria-expanded', String(!isHidden));
+        });
+    }
+    if (elements.btnBannerRefresh) {
+        elements.btnBannerRefresh.addEventListener('click', () => {
+            if (state.currentPage === 'page-leads') {
+                loadLeads();
+            } else if (state.currentPage === 'page-crawlers') {
+                loadSources();
+            }
+            elements.btnBannerRefresh.classList.add('hidden');
+        });
+    }
+    if (elements.btnClearCrawlQueue) {
+        elements.btnClearCrawlQueue.addEventListener('click', async () => {
+            if (!confirm('Bạn có chắc muốn xóa tất cả các lệnh đang chờ trong hàng đợi không?')) return;
+            try {
+                const res = await fetch('/api/crawl/queue', { method: 'DELETE' });
+                if (res.ok) {
+                    showToast('Đã xóa tất cả các lệnh đang chờ trong hàng đợi', 'info');
+                    pollActiveCrawlStatus();
+                } else {
+                    showToast('Không thể xóa hàng đợi', 'error');
+                }
+            } catch (err) {
+                console.error('Lỗi khi xóa hàng đợi:', err);
+                showToast('Lỗi kết nối khi xóa hàng đợi', 'error');
+            }
+        });
+    }
+    // Pause Active Crawl
+    const handlePause = async () => {
+        try {
+            const res = await fetch('/api/crawl/active/pause', { method: 'POST' });
+            if (res.ok) {
+                showToast('Đã tạm dừng luồng crawl (dữ liệu đã quét được bảo lưu 100%)', 'info');
+                pollActiveCrawlStatus();
+            } else {
+                showToast('Không thể tạm dừng luồng crawl', 'error');
+            }
+        } catch (err) {
+            showToast('Lỗi kết nối khi tạm dừng', 'error');
+        }
+    };
+    if (elements.btnPauseActiveCrawl) {
+        elements.btnPauseActiveCrawl.addEventListener('click', handlePause);
+    }
+    if (elements.btnStopActiveCrawl && elements.btnStopActiveCrawl !== elements.btnPauseActiveCrawl) {
+        elements.btnStopActiveCrawl.addEventListener('click', handlePause);
+    }
+
+    // Resume Active Crawl
+    if (elements.btnResumeActiveCrawl) {
+        elements.btnResumeActiveCrawl.addEventListener('click', async () => {
+            try {
+                const res = await fetch('/api/crawl/active/resume', { method: 'POST' });
+                if (res.ok) {
+                    showToast('Đang tiếp tục cào dữ liệu...', 'info');
+                    pollActiveCrawlStatus();
+                } else {
+                    showToast('Không thể tiếp tục luồng crawl', 'error');
+                }
+            } catch (err) {
+                showToast('Lỗi kết nối khi tiếp tục', 'error');
+            }
+        });
+    }
+
+    // Delete Active Crawl (Cancels immediately and deletes from queue/DB)
+    if (elements.btnDeleteActiveCrawl) {
+        elements.btnDeleteActiveCrawl.addEventListener('click', async () => {
+            if (!confirm('Bạn có chắc muốn hủy bỏ và xóa hoàn toàn luồng crawl này không?\n\n- Tiến trình cào sẽ dừng hẳn và đóng trình duyệt.\n- Nếu có lệnh trong hàng đợi, hệ thống sẽ tự động chạy lệnh tiếp theo.')) return;
+            try {
+                const res = await fetch('/api/crawl/active', { method: 'DELETE' });
+                if (res.ok) {
+                    showToast('Đã hủy và xóa luồng crawl thành công', 'info');
+                    pollActiveCrawlStatus();
+                } else {
+                    showToast('Không thể xóa luồng crawl', 'error');
+                }
+            } catch (err) {
+                showToast('Lỗi kết nối khi xóa luồng', 'error');
+            }
+        });
+    }
+    if (elements.btnResumeRecentCrawl) {
+        elements.btnResumeRecentCrawl.addEventListener('click', async () => {
+            const recent = state.activeCrawl.job;
+            if (!recent) return;
+            try {
+                let res;
+                if (recent.id) {
+                    res = await fetch(`/api/crawl/jobs/${recent.id}/resume`, { method: 'POST' });
+                }
+                if (!res || !res.ok) {
+                    const payload = {
+                        source_id: recent.source_id || null,
+                        timeframe: recent.timeframe || '1_week',
+                        force_recrawl: false
+                    };
+                    res = await fetch('/api/crawl/run', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+                }
+                if (res && res.ok) {
+                    showToast('Đã tiếp tục kích hoạt phiên cào mới', 'info');
+                    pollActiveCrawlStatus();
+                } else {
+                    showToast('Không thể tiếp tục phiên cào', 'error');
+                }
+            } catch (err) {
+                showToast('Lỗi kết nối', 'error');
+            }
+        });
+    }
+    if (elements.btnPauseAllQueue) {
+        elements.btnPauseAllQueue.addEventListener('click', async () => {
+            const isAllPaused = state.activeCrawl.allPaused;
+            const endpoint = isAllPaused ? '/api/crawl/queue/resume-all' : '/api/crawl/queue/pause-all';
+            try {
+                const res = await fetch(endpoint, { method: 'POST' });
+                if (res.ok) {
+                    showToast(isAllPaused ? 'Đã tiếp tục tất cả các lệnh trong hàng đợi' : 'Đã tạm dừng tất cả các lệnh trong hàng đợi', 'info');
+                    pollActiveCrawlStatus();
+                } else {
+                    showToast('Không thể thao tác hàng đợi', 'error');
+                }
+            } catch (err) {
+                showToast('Lỗi kết nối', 'error');
+            }
+        });
+    }
 }
 
 // ==========================================
@@ -1523,6 +2229,11 @@ async function loadSchedulerStatus() {
                 elements.schStatusText.className = 'text-success';
                 elements.schedulerStatusDot.className = 'dot-indicator online';
                 elements.schedulerToggleText.textContent = 'Đang bật';
+            } else if (data.enabled) {
+                elements.schStatusText.textContent = 'Đã bật lịch · crawl worker chưa chạy';
+                elements.schStatusText.className = 'text-secondary';
+                elements.schedulerStatusDot.className = 'dot-indicator offline';
+                elements.schedulerToggleText.textContent = 'Đang bật';
             } else {
                 elements.schStatusText.textContent = 'Đang tạm dừng';
                 elements.schStatusText.className = 'text-secondary';
@@ -1532,18 +2243,11 @@ async function loadSchedulerStatus() {
         }
 
         if (elements.schNextRun) {
-            elements.schNextRun.textContent = data.next_run_display || 'Chưa xác định';
+            elements.schNextRun.textContent = data.next_run_display || 'Chưa thiết lập';
         }
-
         if (elements.schLastRun) {
-            if (data.last_run_at) {
-                const summary = data.last_run_summary || {};
-                elements.schLastRun.textContent = `${new Date(data.last_run_at).toLocaleTimeString('vi-VN')} (+${summary.new_leads || 0} lead mới)`;
-            } else {
-                elements.schLastRun.textContent = 'Chưa có phiên gần đây';
-            }
+            elements.schLastRun.textContent = data.last_run_at ? formatDate(data.last_run_at) : 'Chưa có dữ liệu';
         }
-
         if (elements.schTotalRuns) {
             elements.schTotalRuns.textContent = `${data.total_automated_runs || 0} phiên`;
         }
@@ -1578,4 +2282,5 @@ document.addEventListener('DOMContentLoaded', () => {
     initEvents();
     initRouter();
     loadSchedulerStatus();
+    startActiveCrawlMonitoring();
 });

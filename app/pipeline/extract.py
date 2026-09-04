@@ -86,14 +86,14 @@ class AIExtractor:
     Extraction failures are surfaced and unfinished data is never persisted.
     """
 
-    def extract(self, title: str, raw_content: str, source: str = "", raise_on_api_error: bool = False) -> AIExtractionResult:
+    def extract(self, title: str, raw_content: str, source: str = "", raise_on_api_error: bool = False, matched_keywords: Optional[List[str]] = None) -> AIExtractionResult:
         """Extract with the configured AI provider only; never synthesize fallback data."""
         clean_text = clean_html(raw_content)
         if settings.ai_provider == "openai":
             if not settings.openai_api_key:
                 raise AIAuthenticationError("Chưa cấu hình OPENAI_API_KEY cho AI extraction")
             try:
-                return self._extract_openai(title, clean_text, source)
+                return self._extract_openai(title, clean_text, source, matched_keywords)
             except AIAuthenticationError:
                 raise
             except Exception as exc:
@@ -106,7 +106,7 @@ class AIExtractor:
             if not settings.gemini_api_key:
                 raise AIAuthenticationError("Chưa cấu hình GEMINI_API_KEY cho AI extraction")
             try:
-                return self._extract_gemini(title, clean_text, source)
+                return self._extract_gemini(title, clean_text, source, matched_keywords)
             except AIAuthenticationError:
                 raise
             except Exception as exc:
@@ -213,12 +213,13 @@ class AIExtractor:
             cleaned["organization_website"] = None
         return cleaned
 
-    def _extract_openai(self, title: str, text: str, source: str = "") -> AIExtractionResult:
+    def _extract_openai(self, title: str, text: str, source: str = "", matched_keywords: Optional[List[str]] = None) -> AIExtractionResult:
         """Call OpenAI API using structured output."""
         from openai import OpenAI
-        client = OpenAI(api_key=settings.openai_api_key)
+        base_url = settings.openai_base_url or settings.ai_base_url
+        client = OpenAI(api_key=settings.openai_api_key, base_url=base_url)
         
-        prompt = self._extraction_prompt(title, text, source)
+        prompt = self._extraction_prompt(title, text, source, matched_keywords)
         response = client.chat.completions.create(
             model=settings.openai_model,
             messages=[{"role": "user", "content": prompt}],
@@ -276,24 +277,32 @@ class AIExtractor:
         return self._parse_json_object(response.text)
 
     @staticmethod
-    def _extraction_prompt(title: str, text: str, source: str = "") -> str:
+    def _extraction_prompt(title: str, text: str, source: str = "", matched_keywords: Optional[List[str]] = None) -> str:
+        matched_keywords_text = ", ".join(
+            str(item).strip() for item in (matched_keywords or []) if str(item).strip()
+        ) or "Không có keyword khớp được ghi nhận"
         return f"""Bạn là bộ trích xuất vòng 1 có kiểm chứng cho cơ hội B2B/B2G tại Việt Nam.
 
 NGUỒN CRAWLER: {source or "không xác định"}
+KEYWORD KHỚP TỪ GOOGLE SHEETS: {matched_keywords_text}
 TIÊU ĐỀ: {title}
 NỘI DUNG GỐC:
-{text[:16000]}
+{text}
 
 QUY TẮC BẮT BUỘC:
 1. Chỉ trích xuất dữ liệu xuất hiện trực tiếp trong bài gốc. Vòng 1 tuyệt đối không gọi search và không suy đoán.
-2. organization_name là tổ chức có nhu cầu, Chủ đầu tư hoặc Bên mời thầu. Ưu tiên nhãn "Chủ đầu tư", "Bên mời thầu", "Cơ quan ban hành".
-3. Không đủ bằng chứng thì trả null; không trả "Đang cập nhật", "Không rõ" và không tự đặt tên tổ chức.
-4. organization_website chỉ là website/domain xuất hiện trực tiếp trong bài gốc. Không được đoán website theo tên tổ chức.
-5. need_summary chỉ tóm tắt nhu cầu/hành động nêu rõ; không thêm sản phẩm, ngân sách hay kế hoạch ngoài nguồn.
-6. budget_value chỉ điền khi có ngân sách/giá gói thầu rõ ràng.
-7. deadline chỉ là hạn nộp/đóng thầu/hạn chót có nhãn rõ. KHÔNG dùng ngày đăng bài, ngày cập nhật, phê duyệt, sự kiện hoặc ngày trong tiêu đề.
-8. Ngày đăng do crawler lấy từ metadata riêng, không suy diễn trong JSON này.
-9. evidence phải trực tiếp chứng minh tên tổ chức, nhu cầu, ngân sách/deadline và website nếu có.
+   - Keyword khớp từ Google Sheets chỉ là tín hiệu định hướng; phải kiểm tra ngữ cảnh nhu cầu/dự án thực tế trong nội dung gốc.
+2. organization_name là tổ chức có nhu cầu, Chủ đầu tư, Bên mời thầu, hoặc ĐƠN VỊ ĐANG TUYỂN DỤNG (với tin việc làm/Hiring). Ưu tiên nhãn "Chủ đầu tư", "Bên mời thầu", "Đơn vị tuyển dụng", "Công ty".
+3. ĐỐI VỚI TIN TUYỂN DỤNG (TopCV, LinkedIn, Báo chí...):
+   - Việc doanh nghiệp tuyển nhân sự chuyển đổi số/CNTT/AI/ERP/CRM/Hạ tầng là tín hiệu nhu cầu mua sắm/thuê ngoài/hợp tác giải pháp công nghệ quan trọng.
+   - need_summary: Nêu rõ vị trí đang tuyển (ví dụ: Chuyên gia Chuyển đổi số, Trưởng phòng CNTT, Kỹ sư AI...), mô tả nhiệm vụ và hệ thống/công nghệ họ đang muốn triển khai (như ERP, CRM, Cloud, AI, Lark Suite, Số hóa dữ liệu...).
+   - need_categories: Thêm các nhóm nhu cầu liên quan (ví dụ: "Chuyển đổi số", "Tuyển dụng nhân sự CĐS", "Giải pháp phần mềm", "Tư vấn công nghệ"...).
+4. Không đủ bằng chứng thì trả null; không trả "Đang cập nhật", "Không rõ" và không tự đặt tên tổ chức.
+5. organization_website chỉ là website/domain xuất hiện trực tiếp trong bài gốc. Không được đoán website theo tên tổ chức.
+6. budget_value chỉ điền khi có ngân sách, giá gói thầu, hoặc mức lương/ngân sách tuyển dụng rõ ràng (quy đổi về VNĐ nếu có).
+7. deadline là hạn nộp hồ sơ, hạn đóng thầu hoặc hạn ứng tuyển nêu rõ trong bài. KHÔNG dùng ngày đăng bài, ngày cập nhật, phê duyệt hoặc sự kiện.
+   - Ngày đăng do crawler lấy từ metadata riêng; không dùng ngày đăng để thay thế deadline.
+8. evidence phải trực tiếp chứng minh tên tổ chức, vị trí/nhu cầu, công nghệ yêu cầu, ngân sách/deadline và đầu mối liên hệ nếu có.
 
 Trả về duy nhất 1 JSON object hợp lệ:
 {{
@@ -328,9 +337,9 @@ Trả về duy nhất 1 JSON object hợp lệ:
         cleaned["organization_type"] = org_type if org_type in {"government", "enterprise", "other"} else None
         return cleaned
 
-    def _extract_gemini(self, title: str, text: str, source: str = "") -> AIExtractionResult:
+    def _extract_gemini(self, title: str, text: str, source: str = "", matched_keywords: Optional[List[str]] = None) -> AIExtractionResult:
         """Round one uses Gemini only on the crawled source; XAH belongs to round two."""
-        data = self._call_gemini_json(self._extraction_prompt(title, text, source))
+        data = self._call_gemini_json(self._extraction_prompt(title, text, source, matched_keywords))
         data = self._keep_source_backed_website(data, text)
         return AIExtractionResult(**self._normalize_ai_data(data))
 

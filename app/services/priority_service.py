@@ -6,11 +6,15 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from functools import partial
-from typing import Any, Callable, TypeVar
+from typing import Any, Awaitable, Callable, TypeVar
 
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
+
+
+class BackgroundPreemptedError(RuntimeError):
+    """A background navigation was cancelled so a frontend request can run."""
 
 
 class PriorityCoordinator:
@@ -38,6 +42,8 @@ class PriorityCoordinator:
         self._frontend_executor = ThreadPoolExecutor(
             max_workers=4, thread_name_prefix="mio-fe-priority"
         )
+        self._background_operations: dict[asyncio.Task[Any], str] = {}
+        self._preempted_operations: set[asyncio.Task[Any]] = set()
 
     @property
     def is_fe_active(self) -> bool:
@@ -57,6 +63,17 @@ class PriorityCoordinator:
             self._fe_task_count += 1
             if self._fe_task_count == 1:
                 self._pause_background_event.clear()
+                # A navigation already in progress cannot cooperate at its next
+                # boundary, so cancel only the browser operation, not its parent
+                # crawl/enrichment task. The parent will wait and resume later.
+                for task, worker_name in list(self._background_operations.items()):
+                    if not task.done():
+                        self._preempted_operations.add(task)
+                        logger.info(
+                            "[PriorityManager] 🛑 Hủy navigation background đang chạy [%s] để nhường FE",
+                            worker_name,
+                        )
+                        task.cancel()
                 logger.info(f"[PriorityManager] ⚡ [{task_name}] FRONTEND PRIORITY ACQUIRED. Tạm dừng toàn bộ luồng BE chạy ngầm để ưu tiên người dùng...")
 
         try:
@@ -78,6 +95,47 @@ class PriorityCoordinator:
             logger.info(f"[PriorityManager] ⏸️ [{worker_name}] Phát hiện lệnh từ Frontend. Luồng ngầm đang tạm nhường tài nguyên...")
             await self._pause_background_event.wait()
             logger.info(f"[PriorityManager] ▶️ [{worker_name}] Tiếp tục luồng ngầm sau khi lệnh Frontend đã hoàn tất.")
+
+    def _register_background_operation(self, task: asyncio.Task[Any], worker_name: str) -> None:
+        self._background_operations[task] = worker_name
+
+    def _unregister_background_operation(self, task: asyncio.Task[Any]) -> None:
+        self._background_operations.pop(task, None)
+
+    async def run_async(
+        self,
+        func: Callable[..., Awaitable[T]],
+        *args: Any,
+        worker_name: str = "Async Background Worker",
+        **kwargs: Any,
+    ) -> T:
+        """Run one async background operation with FE preemption.
+
+        This is used around Crawl4AI navigation. If FE priority arrives while the
+        navigation is in flight, only that child operation is cancelled and the
+        caller receives a recoverable exception; the caller can then wait at its
+        next browser boundary instead of monopolizing the browser.
+        """
+        if self.is_current_task_frontend:
+            return await func(*args, **kwargs)
+
+        await self.yield_if_fe_active(worker_name)
+        operation = asyncio.create_task(func(*args, **kwargs), name=worker_name)
+        self._register_background_operation(operation, worker_name)
+        try:
+            return await operation
+        except asyncio.CancelledError as exc:
+            # FE may have already released priority by the time cancellation is
+            # delivered. The set is the source of truth for cancellation reason.
+            was_preempted = operation in self._preempted_operations
+            if was_preempted or self.is_fe_active:
+                raise BackgroundPreemptedError(
+                    f"{worker_name} bị tạm dừng để ưu tiên request từ FE"
+                ) from exc
+            raise
+        finally:
+            self._preempted_operations.discard(operation)
+            self._unregister_background_operation(operation)
 
     async def run_blocking(
         self,

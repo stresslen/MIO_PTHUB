@@ -67,13 +67,13 @@ class VietnamNetAdapter(SourceAdapter):
         published_at = extract_published_at(soup, raw_doc.text, title)
 
         content_el = soup.find("div", class_=lambda c: c and "maincontent" in c.lower()) or soup.find("article")
-        body_text = clean_html(str(content_el)) if content_el else raw_doc.text
+        body_text = clean_html(raw_doc.html)
 
         return ParsedItem(
             url=raw_doc.url,
             source_id=self.source_id,
             title=title,
-            raw_content=body_text[:5000],
+            raw_content=body_text,
             published_at=published_at,
             author=None,
             extra_metadata={},
@@ -135,13 +135,13 @@ class VnExpressAdapter(SourceAdapter):
         published_at = extract_published_at(soup, raw_doc.text, title)
 
         content_el = soup.find("article", class_=lambda c: c and "fck_detail" in c.lower()) or soup.find("article")
-        body_text = clean_html(str(content_el)) if content_el else raw_doc.text
+        body_text = clean_html(raw_doc.html)
 
         return ParsedItem(
             url=raw_doc.url,
             source_id=self.source_id,
             title=title,
-            raw_content=body_text[:5000],
+            raw_content=body_text,
             published_at=published_at,
             author=None,
             extra_metadata={},
@@ -206,13 +206,13 @@ class MostGovAdapter(SourceAdapter):
         published_at = extract_published_at(soup, raw_doc.text, title)
 
         content_el = soup.find("div", class_=lambda c: c and "content" in c.lower()) or soup.find("article")
-        body_text = clean_html(str(content_el)) if content_el else raw_doc.text
+        body_text = clean_html(raw_doc.html)
 
         return ParsedItem(
             url=raw_doc.url,
             source_id=self.source_id,
             title=title,
-            raw_content=body_text[:5000],
+            raw_content=body_text,
             published_at=published_at,
             author=None,
             extra_metadata={},

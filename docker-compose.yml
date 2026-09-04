@@ -1,18 +1,36 @@
 version: '3.8'
 
 services:
-  lead-crawler:
+  api:
     build: .
-    container_name: ai_lead_crawler
+    container_name: mio_api
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1
     ports:
       - "8000:8000"
     environment:
       - HOST=0.0.0.0
       - PORT=8000
       - DATABASE_URL=sqlite:///./leads.db
-      - AI_PROVIDER=rule_based
+    env_file:
+      - .env
     volumes:
       - ./data:/app/data
       - ./configs:/app/configs
       - ./leads.db:/app/leads.db
+    restart: unless-stopped
+
+  crawl-worker:
+    build: .
+    container_name: mio_crawl_worker
+    command: python -m scripts.crawl_worker
+    environment:
+      - DATABASE_URL=sqlite:///./leads.db
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+      - ./configs:/app/configs
+      - ./leads.db:/app/leads.db
+    depends_on:
+      - api
     restart: unless-stopped

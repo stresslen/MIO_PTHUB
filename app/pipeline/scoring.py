@@ -3,6 +3,7 @@ import json
 import logging
 import re
 from typing import Any, Dict, List, Optional
+import time
 import requests
 
 from app.config import settings
@@ -41,6 +42,7 @@ class AIScoringEngine:
         published_at: Optional[datetime.datetime],
         relevance: float = 0.0,
         raw_evidence: Optional[List[str]] = None,
+        matched_keywords: Optional[List[str]] = None,
     ) -> ScoreResult:
         """Evaluate a lead using only the configured AI provider.
 
@@ -58,6 +60,7 @@ class AIScoringEngine:
             "deadline": deadline,
             "published_at": published_at,
             "relevance": relevance,
+            "matched_keywords": matched_keywords or [],
         }
 
         if settings.ai_provider == "gemini":
@@ -95,6 +98,7 @@ class AIScoringEngine:
         published_at: Optional[datetime.datetime],
         relevance: float,
         evidence: List[str],
+        matched_keywords: List[str],
     ) -> Optional[ScoreResult]:
         """
         Invoke Google Gemini API (supports both direct Google AI Studio and OpenAI-compatible proxy endpoints).
@@ -111,6 +115,7 @@ class AIScoringEngine:
             published_at=published_at,
             relevance=relevance,
             evidence=evidence,
+            matched_keywords=matched_keywords,
         )
 
         base_url = settings.gemini_base_url or settings.ai_base_url
@@ -131,7 +136,8 @@ class AIScoringEngine:
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": 0.1,
             }
-            resp = requests.post(api_endpoint, headers=headers, json=payload, timeout=30)
+            timeout = max(60, int(settings.llm_timeout_seconds or 60))
+            resp = requests.post(api_endpoint, headers=headers, json=payload, timeout=timeout)
             if resp.status_code == 200:
                 data = resp.json()
                 content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
@@ -167,7 +173,7 @@ class AIScoringEngine:
         }
 
         try:
-            resp = requests.post(endpoint, json=payload, timeout=25)
+            resp = requests.post(endpoint, json=payload, timeout=max(60, int(settings.llm_timeout_seconds or 60)))
             if resp.status_code == 200:
                 data = resp.json()
                 candidates = data.get("candidates", [])

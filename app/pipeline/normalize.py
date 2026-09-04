@@ -5,7 +5,8 @@ import html
 import re
 import unicodedata
 from typing import Optional, Tuple
-from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
+from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode, unquote
+from bs4 import BeautifulSoup
 
 # Common Vietnamese locations
 PROVINCES_VIETNAM = [
@@ -34,16 +35,43 @@ def normalize_unicode(text: Optional[str]) -> str:
 
 
 def clean_html(raw_html: Optional[str]) -> str:
-    """Strip HTML tags, remove navigation/footer boilerplate, and unescape entities safely."""
+    """Convert HTML/JS/Markdown into complete visible text for LLM input.
+
+    Header, footer, navigation, sidebar and form content are intentionally kept
+    because they often contain contact details and organization facts.
+    """
     if not raw_html:
         return ""
-    # Remove script, style, header, footer, nav, aside, noscript, svg, form tags completely
-    cleaned = re.sub(r"<(script|style|header|footer|nav|aside|noscript|svg|form).*?>.*?</\1>", " ", raw_html, flags=re.DOTALL | re.IGNORECASE)
-    # Strip html tags
-    cleaned = re.sub(r"<[^>]+>", " ", cleaned)
-    # Unescape HTML entities
-    cleaned = html.unescape(cleaned)
-    return normalize_unicode(cleaned)
+    soup = BeautifulSoup(str(raw_html), "html.parser")
+    # Remove executable/rendering payloads only; preserve all visible layout sections.
+    for node in soup(["script", "style", "noscript", "template", "svg", "canvas"]):
+        node.decompose()
+    for anchor in soup.find_all("a", href=True):
+        href = str(anchor.get("href") or "").strip()
+        current = normalize_unicode(anchor.get_text(" ", strip=True))
+        if href.lower().startswith("mailto:"):
+            address = unquote(href[7:]).split("?", 1)[0].strip()
+            if address and address not in current:
+                anchor.append(f" [Email: {address}]")
+        elif href.lower().startswith("tel:"):
+            phone = unquote(href[4:]).strip()
+            if phone and phone not in current:
+                anchor.append(f" [SĐT: {phone}]")
+    for image in soup.find_all(["img", "input"]):
+        label = image.get("alt") or image.get("title") or image.get("placeholder") or ""
+        if label:
+            image.append(f" {label} ")
+    cleaned = soup.get_text(" ", strip=True)
+    # Remove common Markdown presentation syntax while retaining its text.
+    cleaned = re.sub(r"!\[([^]]*)\]\([^)]*\)", r"\1", cleaned)
+    cleaned = re.sub(r"\[([^]]+)\]\([^)]*\)", r"\1", cleaned)
+    cleaned = re.sub(r"(?m)^\s{0,3}#{1,6}\s*", "", cleaned)
+    cleaned = re.sub(r"(?m)^\s*>\s?", "", cleaned)
+    cleaned = re.sub(r"```", "", cleaned)
+    cleaned = cleaned.replace("`", "")
+    cleaned = re.sub(r"(?:\*\*|__|~~)", "", cleaned)
+    cleaned = re.sub(r"(?m)^\s*[*+-]\s+", "", cleaned)
+    return normalize_unicode(html.unescape(cleaned))
 
 
 def canonicalize_url(url: str) -> str:
@@ -51,7 +79,10 @@ def canonicalize_url(url: str) -> str:
     if not url:
         return ""
     try:
-        parsed = urlparse(url.strip())
+        raw_url = str(url).strip().strip("*\"'`()[]<>")
+        raw_url = re.sub(r"\*+/?$", "", raw_url)
+        parsed = urlparse(raw_url)
+        netloc = re.sub(r"[\*\'\"`]+", "", parsed.netloc.lower())
         # Filter out common tracking query params
         tracking_params = {"utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "ref", "fbclid", "gclid"}
         query_dict = [(k, v) for k, v in parse_qsl(parsed.query) if k.lower() not in tracking_params]
@@ -62,7 +93,7 @@ def canonicalize_url(url: str) -> str:
         
         clean_url = urlunparse((
             parsed.scheme.lower(),
-            parsed.netloc.lower(),
+            netloc,
             path,
             parsed.params,
             normalized_query,

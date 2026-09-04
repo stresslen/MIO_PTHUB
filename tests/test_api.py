@@ -125,9 +125,11 @@ def test_get_lead_detail_api():
     assert data["company_profile"]["profile_status"] == "PROFILE_INCOMPLETE"
 
 
-def test_removed_stats_and_crawl_history_endpoints():
+def test_stats_endpoint_and_removed_crawl_history_endpoint():
     client = TestClient(app)
-    assert client.get("/api/stats").status_code == 404
+    stats = client.get("/api/stats")
+    assert stats.status_code == 200
+    assert isinstance(stats.json(), dict)
     assert client.get("/api/crawl/runs").status_code == 404
 
 

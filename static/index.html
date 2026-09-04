@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&amp;family=Manrope:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/css/style.css?v=2.8.0">
+    <link rel="stylesheet" href="/static/css/style.css?v=2.9.9">
 </head>
 <body>
     <div class="app-shell">
@@ -36,6 +36,83 @@
         </aside>
 
         <main class="main-content">
+            <!-- Global Crawl Status Notification Banner -->
+            <div class="crawl-status-banner hidden" id="crawl-status-banner" role="region" aria-label="Thông báo trạng thái luồng crawl">
+                <div class="crawl-banner-inner">
+                    <div class="crawl-banner-indicator">
+                        <span class="crawl-banner-pulse" id="crawl-banner-pulse"></span>
+                        <span class="crawl-banner-icon" id="crawl-banner-icon">
+                            <svg class="crawl-spin-svg" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2.5" stroke-dasharray="38" stroke-dashoffset="12" fill="none"/></svg>
+                        </span>
+                    </div>
+                    <div class="crawl-banner-body">
+                        <div class="crawl-banner-headline">
+                            <span class="crawl-badge" id="crawl-banner-badge">Đang thu thập</span>
+                            <strong class="crawl-title" id="crawl-banner-title">Tất cả các nguồn dữ liệu</strong>
+                            <span class="crawl-timer" id="crawl-banner-timer">⏱️ 00:00</span>
+                        </div>
+                        <div class="crawl-banner-desc" id="crawl-banner-desc">
+                            <span class="crawl-desc-item" id="crawl-banner-timeframe">Khoảng: <strong>24 giờ qua</strong></span>
+                            <span class="crawl-sep">·</span>
+                            <span class="crawl-desc-item" id="crawl-banner-trigger">Hình thức: <strong>Thủ công</strong></span>
+                            <span class="crawl-sep">·</span>
+                            <span class="crawl-desc-item" id="crawl-banner-details">Đang quét xoay vòng và bóc tách AI...</span>
+                        </div>
+                    </div>
+                    <div class="crawl-banner-actions">
+                        <button class="btn btn-xs btn-quiet btn-queue-toggle hidden" id="btn-toggle-queue-list" type="button" aria-expanded="false" title="Xem danh sách các lệnh đang chờ">
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
+                            <span id="queue-count-label">0 lệnh chờ</span>
+                        </button>
+                        <button class="btn btn-xs btn-outline btn-warning-soft hidden" id="btn-pause-active-crawl" type="button" title="Tạm dừng quét (bảo lưu kết quả đã quét)">
+                            <svg viewBox="0 0 24 24" aria-hidden="true" style="width:11px;height:11px;fill:currentColor;display:inline-block;vertical-align:-1px;margin-right:2px;"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>
+                            Tạm dừng
+                        </button>
+                        <button class="btn btn-xs btn-outline btn-resume-banner hidden" id="btn-resume-active-crawl" type="button" title="Tiếp tục cào tiếp dữ liệu">
+                            <svg viewBox="0 0 24 24" aria-hidden="true" style="width:11px;height:11px;stroke:currentColor;fill:none;stroke-width:2;display:inline-block;vertical-align:-1px;margin-right:2px;"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                            Tiếp tục chạy
+                        </button>
+                        <button class="btn btn-xs btn-outline btn-danger-soft hidden" id="btn-delete-active-crawl" type="button" title="Hủy bỏ và xóa hoàn toàn luồng crawl này">
+                            <svg viewBox="0 0 24 24" aria-hidden="true" style="width:11px;height:11px;stroke:currentColor;fill:none;stroke-width:2;display:inline-block;vertical-align:-1px;margin-right:2px;"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                            Xóa luồng
+                        </button>
+                        <button class="btn btn-xs btn-outline btn-resume-banner hidden" id="btn-resume-recent-crawl" type="button" title="Tiếp tục chạy lại luồng này">
+                            <svg viewBox="0 0 24 24" aria-hidden="true" style="width:11px;height:11px;stroke:currentColor;fill:none;stroke-width:2;display:inline-block;vertical-align:-1px;margin-right:2px;"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                            Tiếp tục chạy lại
+                        </button>
+                        <button class="btn btn-xs btn-outline hidden" id="btn-banner-refresh" type="button">
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg>
+                            Tải lại dữ liệu
+                        </button>
+                        <button class="btn-close-banner" id="btn-close-crawl-banner" type="button" aria-label="Đóng thông báo">×</button>
+                    </div>
+                </div>
+
+                <!-- Collapsible Queue List Panel -->
+                <div class="crawl-queue-panel hidden" id="crawl-queue-panel">
+                    <div class="crawl-queue-header">
+                        <div>
+                            <strong class="crawl-queue-title" id="crawl-queue-title">Hàng đợi thu thập</strong>
+                            <span class="crawl-queue-subtitle">Các yêu cầu sẽ được tự động thực hiện lần lượt theo thứ tự</span>
+                        </div>
+                        <div class="crawl-queue-header-actions">
+                            <span class="badge-queue-count" id="badge-queued-count">0 yêu cầu</span>
+                            <button class="btn btn-xs btn-outline" id="btn-pause-all-queue" type="button" title="Tạm dừng tất cả các lệnh đang chờ trong hàng đợi">
+                                <svg viewBox="0 0 24 24" aria-hidden="true" style="width:11px;height:11px;fill:currentColor;display:inline-block;vertical-align:-1px;margin-right:2px;"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+                                <span id="label-pause-all-queue">Tạm dừng tất cả</span>
+                            </button>
+                            <button class="btn btn-xs btn-outline btn-danger-soft" id="btn-clear-crawl-queue" type="button" title="Xóa toàn bộ các lệnh đang chờ trong hàng đợi">
+                                <svg viewBox="0 0 24 24" aria-hidden="true" style="width:12px;height:12px;stroke:currentColor;fill:none;stroke-width:2;display:inline-block;vertical-align:-1px;margin-right:2px;"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                                Xóa hàng đợi
+                            </button>
+                        </div>
+                    </div>
+                    <div class="crawl-queue-list" id="crawl-queue-list" role="list">
+                        <!-- Danh sách lệnh chờ được hiển thị thân thiện từ JS -->
+                    </div>
+                </div>
+            </div>
+
             <div class="page-view active" id="page-leads">
                 <header class="top-header">
                     <div class="header-title">
@@ -303,6 +380,13 @@
                 <button class="btn-close" id="btn-close-crawl-modal" type="button" aria-label="Đóng">×</button>
             </div>
             <div class="modal-body">
+                <div class="crawl-modal-notice hidden" id="crawl-modal-active-notice">
+                    <span class="status-dot online"></span>
+                    <div class="crawl-modal-notice-text">
+                        <strong id="crawl-modal-notice-title">Đang có luồng crawl chạy</strong>
+                        <p id="crawl-modal-notice-desc">Tất cả các nguồn · 24 giờ qua. Yêu cầu mới sẽ được xếp vào hàng đợi chờ worker.</p>
+                    </div>
+                </div>
                 <div class="form-group">
                     <label for="crawl-source-select">Nguồn thu thập</label>
                     <select id="crawl-source-select" class="form-control">
@@ -457,6 +541,6 @@
     </div>
 
     <div class="toast-container" id="toast-container" aria-live="polite"></div>
-    <script src="/static/js/app.js?v=2.8.0"></script>
+    <script src="/static/js/app.js?v=2.9.9"></script>
 </body>
 </html>

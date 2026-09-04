@@ -1,4 +1,6 @@
 .env
+.env.*
+!.env.example
 .venv/
 __pycache__/
 *.py[cod]
@@ -6,7 +8,8 @@ __pycache__/
 *.db
 *.db-shm
 *.db-wal
-data/raw/
-
+data/
+profiles/
 crawl4ai/
 scratch/
+

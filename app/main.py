@@ -48,6 +48,7 @@ def create_app() -> FastAPI:
         redoc_url="/redoc",
     )
 
+
     # Add Security Headers Middleware
     app.add_middleware(SecurityHeadersMiddleware)
 
@@ -55,34 +56,23 @@ def create_app() -> FastAPI:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.allowed_origins,
+        allow_origin_regex=r"^https?://.*\.trycloudflare\.com$",
         allow_credentials=True,
         allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["*"],
     )
 
-    # Initialize Database Tables & Start Background Scheduler
+    # Initialize SQLite durable database. Crawl/browser/scheduler work lives in the worker.
     @app.on_event("startup")
     async def on_startup():
-        logger.info("Initializing local query cache...")
+        logger.info("Initializing SQLite durable database...")
         init_db()
         from app.database import SessionLocal
-        from app.services.google_sheets_service import google_sheets_service
         cache_db = SessionLocal()
         try:
             from app.models.lead import Lead
             local_count = cache_db.query(Lead).count()
-            if google_sheets_service.configured or local_count == 0:
-                imported = google_sheets_service.hydrate_sqlite(cache_db)
-            else:
-                imported = 0
-            logger.info("Hydrated %s leads from Google Sheets.", imported)
-            profile_counts = google_sheets_service.hydrate_profiles_sqlite(cache_db)
-            logger.info("Hydrated round-two profiles from Google Sheets: %s", profile_counts)
-            try:
-                synced = google_sheets_service.sync_sqlite(cache_db)
-                logger.info("Synced %s local leads to Google Sheets.", synced)
-            except Exception:
-                logger.exception("Google Sheets sync failed; continuing with the local cache.")
+            logger.info("SQLite database ready: %s leads stored durably.", local_count)
         finally:
             cache_db.close()
         try:
@@ -94,9 +84,7 @@ def create_app() -> FastAPI:
                 keyword_state["source"],
             )
         except Exception:
-            logger.exception(
-                "Google Sheets keyword sync failed; keeping the last in-memory keyword cache."
-            )
+            logger.exception("Không thể nạp keywords từ SQLite")
         try:
             from app.services.source_service import source_service
             source_state = source_service.bootstrap()
@@ -106,22 +94,8 @@ def create_app() -> FastAPI:
                 source_state["source"],
             )
         except Exception:
-            logger.exception(
-                "Google Sheets source sync failed; keeping the last in-memory source cache."
-            )
-        logger.info("Starting configurable crawler scheduler...")
-        from app.services.scheduler_service import scheduler_service
-        scheduler_service.load_persisted_config()
-        scheduler_service.start()
-        logger.info("System initialized successfully.")
-
-    @app.on_event("shutdown")
-    async def on_shutdown():
-        logger.info("Stopping automated daily background scheduler...")
-        from app.services.scheduler_service import scheduler_service
-        scheduler_service.stop()
-        from app.services.browser_crawl_service import browser_crawl_service
-        await browser_crawl_service.close()
+            logger.exception("Không thể nạp crawler sources từ SQLite")
+        logger.info("FE/API process initialized with SQLite as durable database.")
 
     # Include API Routes
     app.include_router(api_router)

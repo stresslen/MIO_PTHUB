@@ -1,5 +1,7 @@
 import datetime
 import json
+from types import SimpleNamespace
+
 
 import pytest
 
@@ -136,10 +138,11 @@ async def test_generic_crawler_discovers_same_domain_and_cleans_html(monkeypatch
         "https://example.test/sitemap.xml": """<urlset><url><loc>https://example.test/news</loc></url></urlset>""",
         "https://example.test/": """
             <html><head><title>Trang chủ</title><script>window.secret = 1</script></head>
-            <body><nav>Menu không cần AI</nav><main><h1>Nhu cầu chuyển đổi số</h1>
+            <body><header>Hotline: 028 1234 5678</header><nav>Menu không cần AI</nav><main><h1>Nhu cầu chuyển đổi số</h1>
             <p>Doanh nghiệp đang tìm giải pháp quản lý dữ liệu và triển khai phần mềm.</p>
-            <a href="/news">Tin tức</a><a href="https://outside.test/page">Ngoài domain</a>
-            </main></body></html>
+            <a href="mailto:contact@example.test">Email doanh nghiệp</a>
+            <a href="tel:+842812345678">Gọi ngay</a><a href="/news">Tin tức</a><a href="https://outside.test/page">Ngoài domain</a>
+            </main><footer>Email: info@example.test | Địa chỉ văn phòng</footer></body></html>
         """,
         "https://example.test/news": """
             <html><head><title>Tin dự án</title></head><body><article>
@@ -166,7 +169,11 @@ async def test_generic_crawler_discovers_same_domain_and_cleans_html(monkeypatch
 
     assert urls == ["https://example.test/", "https://example.test/news"]
     assert "window.secret" not in parsed.raw_content
-    assert "Menu không cần AI" not in parsed.raw_content
+    assert "Menu không cần AI" in parsed.raw_content
+    assert "Hotline: 028 1234 5678" in parsed.raw_content
+    assert "Email: info@example.test" in parsed.raw_content
+    assert "Email: contact@example.test" in parsed.raw_content
+    assert "SĐT: +842812345678" in parsed.raw_content
     assert "Nhu cầu chuyển đổi số" in parsed.raw_content
     assert all("outside.test" not in url for url in urls)
 
@@ -180,7 +187,7 @@ def test_ai_extraction_never_falls_back_without_credentials(monkeypatch):
 
 
 
-def test_source_import_api_saves_before_probe(monkeypatch):
+def test_source_import_api_saves_then_queues_worker_probe(monkeypatch):
     from fastapi.testclient import TestClient
     from app.main import app
     from app.api import sources as sources_api
@@ -218,7 +225,12 @@ def test_source_import_api_saves_before_probe(monkeypatch):
     monkeypatch.setattr(
         sources_api.source_service,
         "probe",
-        lambda source_id: {**pending, "status": "NEEDS_ADAPTER", "enabled": False, "last_error": ERROR_NOTICE},
+        lambda source_id: (_ for _ in ()).throw(AssertionError("API must not run browser probe")),
+    )
+    monkeypatch.setattr(
+        sources_api.crawl_job_service,
+        "enqueue",
+        lambda **kwargs: SimpleNamespace(id="queued-source-job"),
     )
 
     response = TestClient(app).post(
@@ -228,5 +240,6 @@ def test_source_import_api_saves_before_probe(monkeypatch):
 
     assert response.status_code == 200
     assert response.json()["added"] == 1
-    assert response.json()["needs_update"] == 1
-    assert response.json()["items"][0]["last_error"] == ERROR_NOTICE
+    assert response.json()["needs_update"] == 0
+    assert response.json()["items"][0]["status"] == "NEW"
+    assert response.json()["queued_job_ids"] == ["queued-source-job"]

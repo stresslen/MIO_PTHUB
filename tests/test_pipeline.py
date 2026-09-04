@@ -1,3 +1,4 @@
+import pytest
 import datetime
 from app.pipeline.normalize import (
     normalize_unicode,
@@ -85,13 +86,14 @@ def test_canonicalize_url():
     assert clean == "https://baodauthau.vn/tin-tuc.html"
 
 
-def test_dedup_fingerprint():
+def test_dedup_fingerprint_uses_only_canonical_url():
     url1 = "https://baodauthau.vn/bai-1.html"
-    title1 = "Thông báo mời thầu số hóa tài liệu"
-    dt = datetime.datetime(2026, 8, 24)
-
-    fp1 = compute_fingerprint(url1, title1, dt)
-    fp2 = compute_fingerprint(url1 + "?utm_source=test", "  Thông báo mời thầu SỐ HÓA TÀI LIỆU  ", dt)
+    fp1 = compute_fingerprint(url1, "Tiêu đề A", datetime.datetime(2026, 8, 24))
+    fp2 = compute_fingerprint(
+        url1 + "?utm_source=test",
+        "Tiêu đề hoàn toàn khác",
+        datetime.datetime(2027, 1, 1),
+    )
 
     assert fp1 == fp2
     assert len(fp1) == 64
@@ -103,8 +105,9 @@ def test_extract_organization_from_structured_owner_field():
 
 
 def test_strict_extraction_prompt_separates_publication_date_and_deadline():
-    prompt = ai_extractor._extraction_prompt("Hoàn thiện trước 24/8/2026", "Ngày đăng: 23/08/2026", "baodauthau")
+    prompt = ai_extractor._extraction_prompt("Hoàn thiện trước 24/8/2026", "Ngày đăng: 23/08/2026", "baodauthau", ["hệ thống thông tin"])
     assert "KHÔNG dùng ngày đăng bài" in prompt
+    assert "KEYWORD KHỚP TỪ GOOGLE SHEETS: hệ thống thông tin" in prompt
     assert "Ngày đăng do crawler lấy từ metadata riêng" in prompt
     assert '"Đang cập nhật"' in prompt
 
@@ -169,4 +172,34 @@ async def test_frontend_priority_pauses_background_and_uses_reserved_executor():
         assert coordinator.is_fe_active is False
         assert await asyncio.wait_for(background_task, timeout=1) == "background"
     finally:
+        coordinator._frontend_executor.shutdown(wait=True)
+
+
+@pytest.mark.asyncio
+async def test_frontend_preempts_inflight_background_async_operation():
+    import asyncio
+
+    from app.services.priority_service import BackgroundPreemptedError, PriorityCoordinator
+
+    coordinator = PriorityCoordinator()
+    started = asyncio.Event()
+
+    async def slow_navigation():
+        started.set()
+        await asyncio.Event().wait()
+
+    task = asyncio.create_task(
+        coordinator.run_async(slow_navigation, worker_name="test background navigation")
+    )
+    try:
+        await asyncio.wait_for(started.wait(), timeout=1)
+        async with coordinator.fe_priority_context("test frontend preempt"):
+            assert coordinator.is_fe_active is True
+        with pytest.raises(BackgroundPreemptedError):
+            await asyncio.wait_for(task, timeout=1)
+        assert coordinator.is_fe_active is False
+    finally:
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
         coordinator._frontend_executor.shutdown(wait=True)

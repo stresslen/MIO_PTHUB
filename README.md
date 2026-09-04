@@ -6,6 +6,28 @@ Hệ thống được thiết kế và triển khai hoàn chỉnh theo tiêu chu
 
 ---
 
+## Kiến trúc hai tiến trình
+
+MIO không chạy crawl trong FastAPI. Hai terminal trao đổi qua hàng đợi
+`crawl_jobs` trong cùng database:
+
+```text
+Terminal FE/API ── POST /api/crawl/run ──> DB queue ──> Terminal crawl worker
+     phản hồi 202 ngay                                  crawl → AI → Google Sheets
+```
+
+- **Terminal 1 — FE/API:** phục vụ dashboard và các lệnh người dùng; chỉ enqueue
+  crawl job rồi trả ngay, không mở browser và không chạy scheduler.
+- **Terminal 2 — crawl worker:** nhận job từ FE, chạy lịch tự động, crawl/browser,
+  extraction/scoring AI và ghi kết quả sang Google Sheets.
+- SQLite WAL hỗ trợ tốt hai tiến trình trên cùng máy. Khi triển khai API và worker
+  trên hai máy/container không chia sẻ filesystem, phải dùng chung một
+  `DATABASE_URL` PostgreSQL; không dùng hai file SQLite riêng.
+- Worker có heartbeat, hàng đợi FIFO và tự đưa job `RUNNING` dở dang về
+  `QUEUED` khi khởi động lại.
+
+---
+
 ## 🏛️ Kiến Trúc Hệ Thống (Clean Architecture)
 
 ```
@@ -29,7 +51,9 @@ MIO/
 ├── static/                  # Modern Web Dashboard (HTML5, Vanilla CSS Design System, JS)
 ├── scripts/
 │   ├── run_crawler.py       # CLI Runner chạy crawl live từ terminal
-│   └── start.sh             # Script 1-click khởi động hệ thống
+│   ├── crawl_worker.py      # Worker queue + scheduler + crawl + Google Sheets
+│   ├── start.sh             # Terminal 1: FE/API
+│   └── start_worker.sh      # Terminal 2: crawl worker
 ├── tests/                   # Bộ kiểm thử tự động toàn diện (Pytest)
 ├── Dockerfile               # Production Dockerfile
 ├── docker-compose.yml       # Docker Compose configuration
@@ -76,26 +100,36 @@ MIO/
 
 ## 🛠️ Hướng Dẫn Cài Đặt & Khởi Chạy
 
-### Cách 1: Khởi chạy 1-Click (Khuyến nghị)
+### Chạy local bằng hai terminal (khuyến nghị)
+
 ```bash
+# Terminal 1 — chỉ FE/API
 ./scripts/start.sh
+
+# Terminal 2 — crawl, scheduler, AI pipeline và Google Sheets
+./scripts/start_worker.sh
 ```
 
-### Cách 2: Chạy thủ công
+Mở dashboard tại http://127.0.0.1:8000. Nếu dashboard báo crawl worker chưa chạy,
+giữ terminal 2 hoạt động.
+
+### Chạy thủ công không dùng script
+
 ```bash
-# 1. Cài đặt thư viện
+# Cài thư viện một lần
 pip install -r requirements.txt
 
-# 2. Chạy Live Crawl từ terminal để thu thập dữ liệu thật
-python3 -m scripts.run_crawler --all --timeframe 1_week
-
-# 3. Khởi động Web Server
+# Terminal 1
 uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+
+# Terminal 2
+python3 -m scripts.crawl_worker
+
+# Chạy ngay một job toàn nguồn rồi tiếp tục lắng nghe queue
+python3 -m scripts.crawl_worker --run-now --timeframe 1_week
 ```
 
-Sau khi khởi chạy:
-- 🌐 **Web Dashboard**: [http://127.0.0.1:8000](http://127.0.0.1:8000)
-- 📖 **Swagger API Docs**: [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
+Docker Compose cũng khởi động đúng hai service: api và crawl-worker.
 
 ---
 
@@ -125,43 +159,27 @@ Ngày đăng luôn ưu tiên metadata đáng tin cậy từ trang nguồn. Nếu
 
 API key chỉ đọc từ `XAH_API_KEY` trên backend. File `.env` được loại khỏi Git và Docker build context.
 
-### Google Sheets làm database bền vững
+### Cơ chế Lưu trữ Bền vững bằng SQLite Nội bộ
 
-Google Sheets là nguồn lưu bền vững; SQLite chỉ là cache truy vấn cục bộ để giữ nguyên các bộ lọc/dashboard SQL đang có. Khi khởi động, backend hợp nhất hai chiều: nạp dữ liệu từ Sheets vào cache rồi chuyển các lead cục bộ còn thiếu lên Sheets. Mỗi lead mới và thay đổi trạng thái tiếp tục được ghi lên Sheets; hồ sơ vòng 2 được upsert vào các tab riêng và giữ URL/evidence để kiểm tra.
+Dự án sử dụng SQLite (`leads.db`) làm **Cơ sở dữ liệu chính và duy nhất (Primary Durable Database)** trực tiếp trên máy chủ cục bộ:
+- Sử dụng chế độ **SQLite WAL (Write-Ahead Logging)** cho phép API Web và Background Worker đọc/ghi dữ liệu đồng thời với tốc độ cao, không bao giờ bị nghẽn mạng hay chạm hạn mức (quota).
+- Toàn bộ các bảng dữ liệu được lưu trữ tự động trong `leads.db`:
+  - `leads`: Lưu trữ tất cả cơ hội B2B/B2G kèm điểm số, khuyến nghị, trích xuất nhu cầu.
+  - `organizations`, `organization_contacts`, `organization_evidence`: Lưu trữ hồ sơ tổ chức vòng 2, người liên hệ và bằng chứng.
+  - `crawler_sources`: Quản lý danh sách nguồn crawl, URL hạt giống, trạng thái và lỗi.
+  - `keywords`: Quản lý danh sách từ khóa dùng cho lọc và tìm kiếm trực tiếp.
+  - `system_settings`: Quản lý các prompt AI tùy chỉnh (`gemini_scoring_prompt`, `gemini_sales_prompt`) và cấu hình LinkedIn.
+  - `scheduler_state`, `crawl_jobs`, `crawl_runs`: Điều phối hàng đợi và lịch cào tự động.
+- Không còn phụ thuộc vào Google Sheets API (loại bỏ hoàn toàn lỗi 429 Quota Exceeded và 400 Bad Request).
+- Khởi động hệ thống tức thì (< 0.5s).
 
-Setup một lần:
+Toàn bộ nguồn và seed URL được lưu trong bảng `crawler_sources` trên SQLite; `configs/sources.yaml` chỉ seed các nguồn ban đầu nếu database còn trống. Nút **Thêm URL** lưu website mới trực tiếp vào SQLite. Nguồn không crawl được vẫn được lưu với trạng thái `NEEDS_ADAPTER` và thông báo cần cập nhật sau.
 
-1. Tạo một Google Sheet trống và lấy ID trong URL `/spreadsheets/d/<SPREADSHEET_ID>/edit`.
-2. Trong Google Cloud, bật Google Sheets API, tạo Service Account và tải JSON key.
-3. Share Google Sheet quyền Editor cho giá trị `client_email` trong JSON key.
-4. Điền backend/Render env:
-
-```env
-GOOGLE_SHEETS_SPREADSHEET_ID=
-GOOGLE_SERVICE_ACCOUNT_JSON=
-GOOGLE_SHEETS_LEADS_WORKSHEET=Leads
-GOOGLE_SHEETS_SETTINGS_WORKSHEET=Settings
-GOOGLE_SHEETS_KEYWORDS_WORKSHEET=Keywords
-GOOGLE_SHEETS_SOURCES_WORKSHEET=Sources
-GOOGLE_SHEETS_ORGANIZATIONS_WORKSHEET=Organizations
-GOOGLE_SHEETS_CONTACTS_WORKSHEET=Contacts
-GOOGLE_SHEETS_EVIDENCE_WORKSHEET=Organization_Evidence
-GOOGLE_SHEETS_PROJECTS_WORKSHEET=Projects
-GOOGLE_SHEETS_NEWS_WORKSHEET=News
-GOOGLE_SHEETS_JOBS_WORKSHEET=Jobs
-GOOGLE_SHEETS_TENDERS_WORKSHEET=Tenders
-GOOGLE_SHEETS_INTERACTIONS_WORKSHEET=Interactions
-```
-
-Backend ghi lead trực tiếp vào tab `Leads`, đồng thời tự tạo worksheet `Settings`, `Keywords`, `Sources`, `Organizations`, `Contacts`, `Organization_Evidence`, `Projects`, `News`, `Jobs`, `Tenders`, `Interactions` và header khi kết nối lần đầu. Lần đầu mở từng trình chỉnh prompt, backend tự tạo hai key **gemini_scoring_prompt** và **gemini_sales_prompt** trong **Settings**; mỗi phần được cập nhật và áp dụng độc lập cho các lượt xử lý tiếp theo. `configs/keywords.yaml` chỉ seed dữ liệu khi tab `Keywords` còn trống; sau đó pipeline đọc keyword từ cache đồng bộ với Google Sheets. Để chuyển dữ liệu lead hiện có ngay, chạy `.venv/bin/python -m scripts.migrate_to_google_sheets`. Kiểm tra trạng thái an toàn tại `GET /api/storage/status`; endpoint này không bao giờ trả credential.
-
-Toàn bộ nguồn và seed URL được lưu trong worksheet `Sources`; `configs/sources.yaml` chỉ bổ sung các nguồn hệ thống còn thiếu. Nút **Thêm URL** lưu website mới trước khi kiểm tra. Nguồn không crawl được vẫn nằm trong Sheet với trạng thái `NEEDS_ADAPTER` và thông báo cần cập nhật sau.
-
-Trên trang **Nguồn dữ liệu**, nút **Từ khóa** cho phép nhập TXT/CSV, chuỗi phân cách bằng `,` hoặc `;`, và danh sách xuống dòng. Keyword mới được ghi thẳng vào Sheet, chống trùng không phân biệt chữ hoa/thường và dùng ngay sau khi đồng bộ. Chỉ lead đã qua AI xử lý hợp lệ mới được upsert vào worksheet Leads.
+Trên trang **Nguồn dữ liệu**, nút **Từ khóa** cho phép nhập TXT/CSV, chuỗi phân cách bằng `,` hoặc `;`, và danh sách xuống dòng. Keyword mới được ghi thẳng vào bảng `keywords` trong SQLite, chống trùng không phân biệt chữ hoa/thường và có hiệu lực ngay lập tức. Chỉ lead đã qua AI xử lý hợp lệ mới được lưu vào cơ sở dữ liệu `leads`.
 
 ### LinkedIn qua Apify
 
-Nguồn **LinkedIn Posts (Apify)** dùng Actor `harvestapi/linkedin-post-search`. Mỗi lần lịch hằng ngày chạy, Actor tìm tối đa 1.000 bài cho **mỗi keyword Search trực tiếp đang bật** trong worksheet `Keywords`. Khoảng ngày vẫn theo cấu hình chung 1 ngày, 1 tuần hoặc 1 tháng; bình luận và reaction không được crawl.
+Nguồn **LinkedIn Posts (Apify)** dùng Actor `harvestapi/linkedin-post-search`. Mỗi lần lịch hằng ngày chạy, Actor tìm tối đa 1.000 bài cho **mỗi keyword Search trực tiếp đang bật** trong cơ sở dữ liệu `keywords`. Khoảng ngày vẫn theo cấu hình chung 1 ngày, 1 tuần hoặc 1 tháng; bình luận và reaction không được crawl.
 
 ```env
 APIFY_API_TOKEN=<token backend>
@@ -170,25 +188,22 @@ APIFY_LINKEDIN_CONTENT_TYPE=jobs
 APIFY_LINKEDIN_SORT_BY=relevance
 ```
 
-Không chạy Actor thử với dữ liệu thật nếu chưa kiểm tra chi phí: số bài tối đa của một phiên bằng `1.000 × số keyword đang bật`. Token chỉ đặt trong backend/Render, không commit vào Git.
+Không chạy Actor thử với dữ liệu thật nếu chưa kiểm tra chi phí: số bài tối đa của một phiên bằng `1.000 × số keyword đang bật`. Token chỉ đặt trong backend, không commit vào Git.
 
 ### Cào thủ công và đặt lịch
 
 - Nút **Cào lại dữ liệu** cho phép chọn đúng 1 ngày, 1 tuần hoặc 1 tháng trước.
 - Nút **Đặt lịch cào dữ liệu** chỉ cần chọn giờ chạy hàng ngày theo múi giờ `Asia/Ho_Chi_Minh`.
-- Cấu hình lịch được ghi vào worksheet `Settings`, nên được khôi phục sau khi Render restart.
-- Chỉ chạy một Uvicorn worker để tránh một lịch bị kích hoạt nhiều lần.
+- API lưu cấu hình lịch vào bảng `scheduler_state` trong SQLite; crawl worker nhận diện cấu hình và tự động thực thi đúng giờ.
+- Chỉ chạy một crawl worker chủ động; cơ chế claim nguyên tử ngăn chặn hai worker nhận cùng một job.
 
-### Deploy Render
+### Vận hành Trực tiếp trên Máy chủ (Local Server)
 
-Repo đã có `render.yaml`. Tạo Render Blueprint từ file này và nhập các biến `sync: false` khi được hỏi:
-
-- `XAH_API_KEY`
-- `APIFY_API_TOKEN`
-- `GEMINI_API_KEY` (có thể dùng cùng gateway key hiện tại)
-- `GOOGLE_SERVICE_ACCOUNT_JSON`
-
-Blueprint dùng gói `starter` vì scheduler nằm trong tiến trình web và cần instance luôn hoạt động. Nếu đổi sang gói `free`, web service có thể sleep khi không có traffic và lịch nội bộ sẽ không chạy đúng giờ. Dữ liệu vẫn an toàn trên Google Sheets vì filesystem Render chỉ được dùng làm cache.
+Hệ thống được thiết kế để chạy trực tiếp trên máy chủ này mà không cần deploy lên Render:
+- Chạy bằng 2 terminal:
+  - Terminal 1: `./scripts/start.sh` (FastAPI Web Dashboard & REST API)
+  - Terminal 2: `./scripts/start_worker.sh` (Crawl Worker, AI Pipeline, Auto Scheduler)
+- Hai tiến trình dùng chung file database SQLite `leads.db` qua chế độ WAL mode cực nhanh và ổn định.
 
 ### Kiểm thử
 

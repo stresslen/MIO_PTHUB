@@ -8,6 +8,7 @@ from typing import Any
 from app.config import settings
 from app.pipeline.normalize import utc_now
 from app.services.google_sheets_service import google_sheets_service
+from app.services.setting_service import setting_service
 
 
 LINKEDIN_APIFY_SETTING_KEY = "linkedin_apify_config"
@@ -16,8 +17,8 @@ MAX_POSTS_PER_KEYWORD = 1000
 
 
 class LinkedInSettingsService:
-    def __init__(self, sheets=google_sheets_service) -> None:
-        self.sheets = sheets
+    def __init__(self, sheets=None) -> None:
+        self.sheets = sheets if sheets is not None else setting_service
         self._lock = threading.RLock()
         self._cached_max_posts: int | None = None
 
@@ -53,39 +54,41 @@ class LinkedInSettingsService:
                     )
                 self._cached_max_posts = value
 
-                if stored_value is None and self.sheets.configured:
-                    self.sheets.save_setting(
-                        LINKEDIN_APIFY_SETTING_KEY,
-                        {
-                            "max_posts_per_keyword": value,
-                            "updated_at": utc_now().isoformat(),
-                        },
-                    )
+                if stored_value is None:
+                    if not hasattr(self.sheets, "configured") or self.sheets.configured:
+                        self.sheets.save_setting(
+                            LINKEDIN_APIFY_SETTING_KEY,
+                            {
+                                "max_posts_per_keyword": value,
+                                "updated_at": utc_now().isoformat(),
+                            },
+                        )
 
         return {
             "max_posts_per_keyword": value,
             "min_posts_per_keyword": MIN_POSTS_PER_KEYWORD,
             "max_allowed_posts_per_keyword": MAX_POSTS_PER_KEYWORD,
             "setting_key": LINKEDIN_APIFY_SETTING_KEY,
-            "storage": "google_sheets" if self.sheets.configured else "environment",
+            "storage": "sqlite" if self.sheets is setting_service else ("google_sheets" if getattr(self.sheets, "configured", False) else "environment"),
         }
 
     def update(self, max_posts_per_keyword: int) -> dict[str, Any]:
         value = self._validate(max_posts_per_keyword)
-        if not self.sheets.configured:
+        if hasattr(self.sheets, "configured") and not self.sheets.configured:
             raise RuntimeError(
-                "Google Sheets chưa được cấu hình để lưu thiết lập LinkedIn"
+                "Kho lưu trữ chưa được cấu hình để lưu thiết lập LinkedIn"
             )
-        if not self.sheets.save_setting(
+        res = self.sheets.save_setting(
             LINKEDIN_APIFY_SETTING_KEY,
             {
                 "max_posts_per_keyword": value,
                 "updated_at": utc_now().isoformat(),
             },
-        ):
+        )
+        if res is False:
             raise RuntimeError(
-                self.sheets.last_error
-                or "Không thể lưu thiết lập LinkedIn vào worksheet Settings"
+                getattr(self.sheets, "last_error", None)
+                or "Không thể lưu thiết lập LinkedIn vào cơ sở dữ liệu"
             )
         with self._lock:
             self._cached_max_posts = value

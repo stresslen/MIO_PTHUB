@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 
 from app.config import RAW_DATA_DIR, settings
 from app.services.browser_crawl_service import browser_crawl_service
+from app.services.priority_service import BackgroundPreemptedError
 from app.services.keyword_service import keyword_service
 from app.pipeline.normalize import canonicalize_url, clean_html, normalize_unicode, parse_datetime, utc_now
 
@@ -161,7 +162,7 @@ class SourceAdapter(ABC):
         name: str,
         seed_urls: List[str],
         rate_limit_delay: float = 1.0,
-        timeout: int = 30,
+        timeout: int = 60,
     ):
         self.source_id = source_id
         self.name = name
@@ -288,6 +289,10 @@ class SourceAdapter(ABC):
                     snapshot_path=str(snapshot_path),
                 )
 
+            except BackgroundPreemptedError:
+                # Do not retry the same URL while FE owns priority. The next
+                # background URL boundary will wait until FE is finished.
+                raise
             except Exception as e:
                 last_error = e
                 err_str = str(e).lower()

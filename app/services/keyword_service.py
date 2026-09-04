@@ -7,6 +7,8 @@ import unicodedata
 from typing import Any
 
 from app.config import get_keywords_config
+from app.database import SessionLocal
+from app.models.keyword import KeywordItem
 
 CUSTOM_GROUP_ID = "custom"
 CUSTOM_GROUP_NAME = "Từ khóa tùy chỉnh"
@@ -147,34 +149,122 @@ class KeywordService:
             })
         return cleaned
 
-    def bootstrap(self) -> dict[str, Any]:
-        """Create/seed the worksheet once, then make it the runtime source."""
-        if not self.sheets.configured:
-            return self.snapshot()
+    @staticmethod
+    def _load_from_sqlite() -> list[dict[str, Any]]:
+        session = SessionLocal()
         try:
-            self.sheets.seed_keyword_rows(self._rows)
+            items = session.query(KeywordItem).filter_by(active=True).all()
+            return [
+                {
+                    "keyword": item.keyword,
+                    "group_id": item.group_id,
+                    "group_name": item.group_name,
+                    "use_for_filter": item.use_for_filter,
+                    "use_for_discovery": item.use_for_discovery,
+                    "active": item.active,
+                    "created_at": item.created_at.isoformat() if item.created_at else "",
+                    "updated_at": item.updated_at.isoformat() if item.updated_at else "",
+                }
+                for item in items
+            ]
+        finally:
+            session.close()
+
+    @staticmethod
+    def _seed_sqlite(rows: list[dict[str, Any]]) -> None:
+        session = SessionLocal()
+        try:
+            count = session.query(KeywordItem).count()
+            if count == 0:
+                for r in rows:
+                    item = KeywordItem(
+                        keyword=r["keyword"],
+                        group_id=r.get("group_id", CUSTOM_GROUP_ID),
+                        group_name=r.get("group_name", CUSTOM_GROUP_NAME),
+                        use_for_filter=r.get("use_for_filter", True),
+                        use_for_discovery=r.get("use_for_discovery", False),
+                        active=r.get("active", True),
+                    )
+                    session.add(item)
+                session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    @staticmethod
+    def _upsert_sqlite(rows: list[dict[str, Any]]) -> dict[str, int]:
+        session = SessionLocal()
+        added = promoted = duplicates = 0
+        try:
+            for r in rows:
+                key = r["keyword"].strip()
+                existing = session.query(KeywordItem).filter_by(keyword=key).first()
+                if existing is None:
+                    item = KeywordItem(
+                        keyword=key,
+                        group_id=r.get("group_id", CUSTOM_GROUP_ID),
+                        group_name=r.get("group_name", CUSTOM_GROUP_NAME),
+                        use_for_filter=r.get("use_for_filter", True),
+                        use_for_discovery=r.get("use_for_discovery", False),
+                        active=True,
+                    )
+                    session.add(item)
+                    added += 1
+                elif r.get("use_for_discovery") and not existing.use_for_discovery:
+                    existing.use_for_discovery = True
+                    existing.updated_at = datetime.datetime.utcnow()
+                    promoted += 1
+                else:
+                    duplicates += 1
+            session.commit()
+            return {"added": added, "promoted": promoted, "duplicates": duplicates}
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    def bootstrap(self) -> dict[str, Any]:
+        """Create/seed keywords into storage, then make it the runtime source."""
+        if self._sheets is not None and getattr(self._sheets, "configured", False):
+            try:
+                self.sheets.seed_keyword_rows(self._rows)
+                return self.refresh()
+            except Exception as exc:
+                with self._lock:
+                    self._last_error = str(exc)
+                raise
+        # SQLite storage (local primary database)
+        try:
+            self._seed_sqlite(self._rows)
             return self.refresh()
         except Exception as exc:
             with self._lock:
                 self._last_error = str(exc)
-            raise
+            return self.snapshot()
 
     def refresh(self) -> dict[str, Any]:
-        if not self.sheets.configured:
-            raise RuntimeError("Google Sheets chưa được cấu hình để đồng bộ keyword")
-        rows = self._clean_rows(self.sheets.get_keyword_rows())
-        if not rows:
-            raise RuntimeError("Worksheet Keywords không có keyword đang hoạt động")
+        if self._sheets is not None and getattr(self._sheets, "configured", False):
+            rows = self._clean_rows(self.sheets.get_keyword_rows())
+            if not rows:
+                raise RuntimeError("Worksheet Keywords không có keyword đang hoạt động")
+            source_name = "google_sheets"
+        else:
+            rows = self._clean_rows(self._load_from_sqlite())
+            if not rows:
+                rows = self._rows
+            source_name = "sqlite"
+
         with self._lock:
             self._rows = rows
-            self._source = "google_sheets"
+            self._source = source_name
             self._last_error = None
             self._last_synced_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
         return self.snapshot()
 
     def add(self, content: str, use_for_discovery: bool = False) -> dict[str, Any]:
-        if not self.sheets.configured:
-            raise RuntimeError("Google Sheets chưa được cấu hình để lưu keyword")
         keywords = parse_keyword_input(content)
         with self._lock:
             discovery_keys = {
@@ -199,7 +289,12 @@ class KeywordService:
             "created_at": now,
             "updated_at": now,
         } for keyword in keywords]
-        result = self.sheets.upsert_keyword_rows(rows)
+
+        if self._sheets is not None and getattr(self._sheets, "configured", False):
+            result = self.sheets.upsert_keyword_rows(rows)
+        else:
+            result = self._upsert_sqlite(rows)
+
         snapshot = self.refresh()
         return {**result, "submitted": len(keywords), "total": snapshot["total"]}
 

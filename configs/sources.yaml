@@ -130,5 +130,5 @@ sources:
     adapter: "app.crawlers.topcv.TopCVAdapter"
     seed_urls:
       - "https://www.topcv.vn/"
-    rate_limit_delay: 0.5
+    rate_limit_delay: 10.0
     timeout: 90

@@ -73,6 +73,7 @@ def test_custom_prompts_are_saved_and_used_independently():
         published_at=datetime.datetime(2026, 8, 25),
         relevance=0.91,
         evidence=["Đơn vị mời thầu hệ thống số hóa hồ sơ."],
+        matched_keywords=["OCR", "số hóa"],
     )
 
     assert scoring["prompt"] == scoring_custom
@@ -82,6 +83,8 @@ def test_custom_prompts_are_saved_and_used_independently():
     assert scoring_custom in runtime
     assert sales_custom in runtime
     assert "sales@example.vn" in runtime
+    assert "Keyword khớp ở vòng lọc: OCR, số hóa" in runtime
+    assert "Kiểm tra CỔNG LIÊN QUAN" in runtime
     assert "JSON BẮT BUỘC" in runtime
 
 
@@ -130,7 +133,7 @@ def test_frontend_uses_separate_editors_and_cache_busted_javascript():
     assert 'id="sales-prompt-modal"' in html
     assert 'id="btn-open-scoring-prompt"' in html
     assert 'id="btn-open-sales-prompt"' in html
-    assert "/static/js/app.js?v=2.8.0" in html
+    assert "/static/js/app.js?v=2.9.0" in html
     assert "/api/scoring/prompts/" in javascript
     assert "Cơ sở chấm điểm" not in javascript
     assert "Kịch bản tiếp cận đề xuất" in javascript

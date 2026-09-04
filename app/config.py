@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List
 import yaml
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings
 
 # Base directories
@@ -37,26 +37,56 @@ class Settings(BaseSettings):
 
     # AI Model & Extraction & Scoring
     ai_provider: str = Field(default="gemini", description="gemini, openai, or rule_based")
+    ai_api_key: str | None = None
     gemini_api_key: str | None = None
-    gemini_model: str = "gemini-2.0-flash-lite"
+    gemini_model: str = "levuphong2909/gemini-3.8-flash-high"
     gemini_base_url: str | None = None  # Custom OpenAI-compatible proxy or gateway URL
     ai_base_url: str | None = None
     openai_api_key: str | None = None
-    openai_model: str = "gpt-4o-mini"
+    openai_model: str = "dungcsnd113/deepseek-v4-flash-0731"
     openai_base_url: str | None = None
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "llama3"
-    llm_timeout_seconds: int = 45
+    llm_timeout_seconds: int = 60
 
     # XAH Search API - credentials always stay on the backend
     xah_api_key: str | None = None
     xah_search_url: str = "https://api.xah.io/v1/search"
-    xah_search_model: str = "search"
+    xah_search_model: str = "dungcsnd113/deepseek-v4-flash-0731"
     xah_search_type: str = "web"
     xah_max_results: int = 5
     xah_country: str = "Vietnam"
     xah_language: str = "Vietnam"
     xah_timeout_seconds: int = 60
+
+    @model_validator(mode="after")
+    def _normalize_ai_settings(self) -> Settings:
+        # Fallback API key: ai_api_key <-> xah_api_key <-> gemini_api_key <-> openai_api_key
+        common_key = self.xah_api_key or self.ai_api_key or self.gemini_api_key or self.openai_api_key
+        if not self.xah_api_key and common_key:
+            self.xah_api_key = common_key
+        if not self.gemini_api_key and common_key:
+            self.gemini_api_key = common_key
+        if not self.openai_api_key and common_key:
+            self.openai_api_key = common_key
+        if not self.ai_api_key and common_key:
+            self.ai_api_key = common_key
+
+        # Normalization and fallback for base URLs:
+        common_base = self.ai_base_url or self.gemini_base_url or self.openai_base_url
+        if common_base:
+            clean_base = common_base.removesuffix("/chat/completions").rstrip("/")
+            if not self.ai_base_url:
+                self.ai_base_url = clean_base
+            if not self.gemini_base_url:
+                self.gemini_base_url = clean_base
+            else:
+                self.gemini_base_url = self.gemini_base_url.removesuffix("/chat/completions").rstrip("/")
+            if not self.openai_base_url:
+                self.openai_base_url = clean_base
+            else:
+                self.openai_base_url = self.openai_base_url.removesuffix("/chat/completions").rstrip("/")
+        return self
 
     # Apify LinkedIn Post Search; token stays on the backend.
     apify_api_token: str | None = None
@@ -72,10 +102,12 @@ class Settings(BaseSettings):
     # content directly. XAH also fills evidence gaps after a direct crawl.
     company_enrichment_enabled: bool = True
     company_enrichment_mode: str = "xah"
-    company_profile_max_pages: int = 60
+    company_profile_max_pages: int = 20
     company_profile_max_depth: int = 3
-    company_profile_context_chars: int = 60000
     company_xah_max_queries: int = 3
+    # Retry XAH URL discovery when all returned URLs fail backend crawling.
+    # The service caps this value at 5 attempts.
+    company_xah_retry_attempts: int = 5
 
     # Google Sheets durable database (SQLite is only a local query cache)
     google_sheets_spreadsheet_id: str | None = None
@@ -104,7 +136,7 @@ class Settings(BaseSettings):
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36 AILeadCrawler/1.0"
     )
-    crawl_timeout_seconds: int = 30
+    crawl_timeout_seconds: int = 60
     max_retries: int = 2
     retry_backoff_factor: float = 1.5
     default_rate_limit_delay: float = 1.0

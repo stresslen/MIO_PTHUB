@@ -66,13 +66,13 @@ class ChinhPhuAdapter(SourceAdapter):
         published_at = extract_published_at(soup, raw.text, title)
 
         content_el = soup.find("div", class_=lambda c: c and any(k in c.lower() for k in ["content", "detail", "body", "article"])) or soup.find("article")
-        body_text = clean_html(str(content_el)) if content_el else raw.text
+        body_text = clean_html(raw.html)
 
         return ParsedItem(
             url=raw.url,
             source_id=self.source_id,
             title=title,
-            raw_content=body_text[:5000],
+            raw_content=body_text,
             published_at=published_at,
             author=None,
             extra_metadata={},
@@ -119,13 +119,13 @@ class XayDungChinhSachAdapter(SourceAdapter):
         published_at = extract_published_at(soup, raw.text, title)
 
         content_el = soup.find("div", class_=lambda c: c and "content" in c.lower()) or soup.find("article")
-        body_text = clean_html(str(content_el)) if content_el else raw.text
+        body_text = clean_html(raw.html)
 
         return ParsedItem(
             url=raw.url,
             source_id=self.source_id,
             title=title,
-            raw_content=body_text[:5000],
+            raw_content=body_text,
             published_at=published_at,
             author=None,
             extra_metadata={},
@@ -172,13 +172,13 @@ class CongBaoAdapter(SourceAdapter):
         published_at = extract_published_at(soup, raw.text, title)
 
         content_el = soup.find("div", class_=lambda c: c and "content" in c.lower()) or soup.find("article")
-        body_text = clean_html(str(content_el)) if content_el else raw.text
+        body_text = clean_html(raw.html)
 
         return ParsedItem(
             url=raw.url,
             source_id=self.source_id,
             title=title,
-            raw_content=body_text[:5000],
+            raw_content=body_text,
             published_at=published_at,
             author=None,
             extra_metadata={},

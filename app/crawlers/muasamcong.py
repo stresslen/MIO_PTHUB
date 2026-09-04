@@ -88,7 +88,7 @@ class MuaSamCongAdapter(SourceAdapter):
             url=raw_doc.url,
             source_id=self.source_id,
             title=title,
-            raw_content=clean_text[:5000],
+            raw_content=clean_text,
             published_at=published_at,
             author=None,
             extra_metadata={"description": "Thông tin lựa chọn nhà thầu và thông báo mời thầu trên Hệ thống mạng đấu thầu quốc gia"},

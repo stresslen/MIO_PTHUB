@@ -7,7 +7,7 @@ from typing import Any
 
 from app.config import settings
 from app.pipeline.normalize import canonicalize_url
-from app.services.priority_service import priority_coordinator
+from app.services.priority_service import BackgroundPreemptedError, priority_coordinator
 
 logger = logging.getLogger(__name__)
 
@@ -105,7 +105,7 @@ class BrowserCrawlService:
             page_timeout=max(1, timeout) * 1000,
             delay_before_return_html=0.75,
             ignore_body_visibility=True,
-            process_iframes=True,
+            process_iframes=False,
             flatten_shadow_dom=True,
             simulate_user=True,
             override_navigator=True,
@@ -114,7 +114,19 @@ class BrowserCrawlService:
             remove_consent_popups=True,
             max_retries=0,
         )
-        result = await crawler.arun(url=url, config=run_config)
+        while True:
+            try:
+                result = await priority_coordinator.run_async(
+                    crawler.arun,
+                    url=url,
+                    config=run_config,
+                    worker_name=f"Crawl4AI {source_id}",
+                )
+                break
+            except BackgroundPreemptedError:
+                # Resume this exact URL after FE releases priority. This avoids
+                # losing a seed/detail page while preventing hot retries.
+                await priority_coordinator.yield_if_fe_active(f"Crawl4AI {source_id}")
         status = int(getattr(result, "status_code", 0) or 0)
         html = str(getattr(result, "html", "") or "")
         error = str(getattr(result, "error_message", "") or "").strip()

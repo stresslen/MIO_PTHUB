@@ -15,7 +15,7 @@ from app.crawlers.base import (
     SourceAdapter,
     extract_published_at,
 )
-from app.pipeline.normalize import canonicalize_url, normalize_unicode
+from app.pipeline.normalize import canonicalize_url, clean_html, normalize_unicode
 from app.services.source_service import (
     CUSTOM_MAX_DEPTH,
     CUSTOM_MAX_PAGES,
@@ -162,15 +162,12 @@ class GenericWebsiteAdapter(SourceAdapter):
             title = urlparse(raw.url).path.strip("/").replace("-", " ") or self.name
 
         published_at = extract_published_at(soup, raw.text, title)
-        for node in soup([
-            "script", "style", "noscript", "template", "svg", "canvas",
-            "form", "nav", "header", "footer", "aside",
-        ]):
-            node.decompose()
-        content_node = soup.find("article") or soup.find("main") or soup.body or soup
-        body_text = normalize_unicode(content_node.get_text(" ", strip=True))
-        if len(body_text) < 80:
-            raise RuntimeError("Trang không có đủ nội dung HTML tĩnh")
+        # Parse the complete document body instead of selecting article/main only.
+        # clean_html keeps header/footer/nav/aside/form and converts mailto/tel into text.
+        content_node = soup.body or soup
+        body_text = clean_html(str(content_node))
+        if not body_text.strip():
+            raise RuntimeError("Trang không có nội dung text")
 
         return ParsedItem(
             url=raw.url,
@@ -179,5 +176,5 @@ class GenericWebsiteAdapter(SourceAdapter):
             raw_content=body_text,
             published_at=published_at,
             author=None,
-            extra_metadata={"adapter": "generic", "cleaned_html": True},
+            extra_metadata={"adapter": "generic", "cleaned_html": True, "kept_layout_sections": True},
         )

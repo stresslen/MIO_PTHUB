@@ -22,6 +22,7 @@ if settings.database_url.startswith("sqlite"):
         cursor.execute("PRAGMA journal_mode=WAL")
         cursor.execute("PRAGMA synchronous=NORMAL")
         cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.execute("PRAGMA busy_timeout=5000")
         cursor.close()
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine, expire_on_commit=False)
@@ -42,6 +43,8 @@ def init_db() -> None:
     import app.models.lead  # noqa: F401
     import app.models.source  # noqa: F401
     import app.models.organization  # noqa: F401
+    import app.models.setting  # noqa: F401
+    import app.models.keyword  # noqa: F401
     Base.metadata.create_all(bind=engine)
 
     # SQLite column migration check

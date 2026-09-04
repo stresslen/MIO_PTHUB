@@ -52,46 +52,40 @@ async def test_round_two_complete_profile_does_not_call_xah(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_missing_profile_calls_xah_and_loads_result_urls(monkeypatch):
+async def test_missing_profile_calls_xah_and_crawls_official_site(monkeypatch):
     service = CompanyEnrichmentService()
     monkeypatch.setattr(settings, "company_enrichment_enabled", True)
     monkeypatch.setattr(settings, "company_enrichment_mode", "xah")
     monkeypatch.setattr(settings, "xah_api_key", "test-key")
-    monkeypatch.setattr(
-        "app.services.company_enrichment_service.validate_public_url",
-        lambda url, resolve_dns=True: (True, None),
-    )
+
+    xah_url = "https://abc.example.com"
+    crawled = []
+    calls = iter([complete_profile(xah_url)])
 
     async def crawl(url):
-        return "URL: https://abc.vn\\nNội dung chưa đủ", ["https://abc.vn/"], []
+        crawled.append(url)
+        return "URL: https://abc.example.com\nNội dung hồ sơ đầy đủ", [xah_url], []
 
-    calls = iter([
-        {"legal_name": "Công ty ABC", "missing_information": ["contacts", "technologies"]},
-        complete_profile("https://news.example.com/abc-profile"),
-    ])
-    loaded = []
     monkeypatch.setattr(service, "_crawl_official_site", crawl)
-    monkeypatch.setattr(service, "_make_queries", lambda *args: ['"Công ty ABC" CIO công nghệ'])
+    monkeypatch.setattr(service, "_make_queries", lambda *args: ['"Công ty ABC" website chính thức'])
     monkeypatch.setattr(service, "_search_queries", lambda queries: ([{
-        "url": "https://news.example.com/abc-profile", "title": "Hồ sơ ABC", "snippet": "Giám đốc CNTT"
+        "url": xah_url, "title": "Công ty ABC", "snippet": "Công ty ABC"
     }], []))
+    monkeypatch.setattr(
+        "app.services.company_enrichment_service.ai_extractor._call_gemini_json",
+        lambda prompt: next(calls),
+    )
 
-    def load_urls(results):
-        loaded.extend(item["url"] for item in results)
-        return ([{"url": results[0]["url"], "title": "Hồ sơ ABC", "text": "Thông tin CIO và công nghệ"}], [])
+    result = await service.enrich("Công ty ABC", "enterprise", None, None, "Hà Nội")
 
-    monkeypatch.setattr(service, "_load_search_urls", load_urls)
-    monkeypatch.setattr("app.services.company_enrichment_service.ai_extractor._call_gemini_json", lambda prompt: next(calls))
-
-    result = await service.enrich("Công ty ABC", "enterprise", "https://abc.vn", None, "Hà Nội")
-    assert loaded == ["https://news.example.com/abc-profile"]
+    assert crawled == [xah_url]
     assert result.xah_used is True
     assert result.status == "COMPLETE"
-    assert "https://news.example.com/abc-profile" in result.source_urls
+    assert xah_url in result.source_urls
 
 
 @pytest.mark.asyncio
-async def test_missing_round_one_url_sends_keywords_to_xah_without_direct_crawl(monkeypatch):
+async def test_missing_round_one_url_crawls_result_urls_before_gemini(monkeypatch):
     service = CompanyEnrichmentService()
     monkeypatch.setattr(settings, "company_enrichment_enabled", True)
     monkeypatch.setattr(settings, "company_enrichment_mode", "xah")
@@ -102,30 +96,31 @@ async def test_missing_round_one_url_sends_keywords_to_xah_without_direct_crawl(
         service,
         "_make_queries",
         lambda name, tax_code, location, targets: (
-            generated_targets.extend(targets) or ['"Công ty ABC" hồ sơ công ty người liên hệ']
+            generated_targets.extend(targets) or ['"Công ty ABC" website chính thức']
         ),
     )
     xah_url = "https://directory.example.com/cong-ty-abc"
     monkeypatch.setattr(service, "_search_queries", lambda queries: ([{
         "url": xah_url,
         "title": "Hồ sơ Công ty ABC",
-        "snippet": "Công ty ABC hoạt động trong lĩnh vực CNTT; Giám đốc CNTT là Nguyễn Văn A.",
+        "snippet": "Công ty ABC hoạt động trong lĩnh vực CNTT",
         "query": queries[0],
-        "xah_answer": "XAH tìm thấy hồ sơ và người liên hệ của Công ty ABC.",
+        "xah_answer": "XAH tìm thấy website chính thức của Công ty ABC.",
         "published_at": None,
     }], []))
 
-    async def unexpected_crawl(url):
-        raise AssertionError("Không được crawl website trực tiếp khi vòng 1 không có URL")
+    crawled = []
 
-    monkeypatch.setattr(service, "_crawl_official_site", unexpected_crawl)
-    monkeypatch.setattr(
-        service,
-        "_load_search_urls",
-        lambda results: (_ for _ in ()).throw(
-            AssertionError("Nhánh không URL phải dùng trực tiếp dữ liệu XAH")
-        ),
-    )
+    async def crawl(url):
+        crawled.append(url)
+        return (
+            "URL: https://directory.example.com/cong-ty-abc\n"
+            "Nội dung đầy đủ về CIO, công nghệ và dự án của Công ty ABC",
+            [xah_url, "https://directory.example.com/gioi-thieu"],
+            [],
+        )
+
+    monkeypatch.setattr(service, "_crawl_official_site", crawl)
     prompts = []
     profile_data = complete_profile(xah_url)
     profile_data["official_url"] = xah_url
@@ -139,16 +134,22 @@ async def test_missing_round_one_url_sends_keywords_to_xah_without_direct_crawl(
         extract_profile,
     )
 
-    result = await service.enrich("Công ty ABC", "enterprise", None, None, "Hà Nội")
+    result = await service.enrich(
+        "Công ty ABC", "enterprise", None, None, "Hà Nội",
+        round_one_context="{\"need_summary\":\"Nhu cầu chuyển đổi số\"}",
+    )
 
     assert "official_url" in generated_targets
     assert len(prompts) == 1
-    assert "KẾT QUẢ XAH SEARCH CÓ URL NGUỒN" in prompts[0]
-    assert "Đoạn nội dung XAH thu thập" in prompts[0]
+    assert crawled == [xah_url]
+    assert "DỮ LIỆU CRAWL WEBSITE CHÍNH THỨC" in prompts[0]
+    assert "DỮ LIỆU ĐÃ TRÍCH XUẤT Ở VÒNG 1" in prompts[0]
+    assert "Nhu cầu chuyển đổi số" in prompts[0]
+    assert "Nội dung đầy đủ về CIO" in prompts[0]
     assert result.status == "COMPLETE"
     assert result.xah_used is True
-    assert result.organization["official_url"] == xah_url
-    assert result.source_urls == [xah_url]
+    assert result.organization["official_url"] == "https://directory.example.com/"
+    assert "https://directory.example.com/gioi-thieu" in result.source_urls
 
 
 @pytest.mark.asyncio
@@ -187,3 +188,76 @@ def test_unseen_source_url_is_rejected_from_profile():
     assert contacts == []
     assert evidence == []
     assert "contacts" in missing
+
+
+@pytest.mark.asyncio
+async def test_xah_retries_until_a_new_url_crawls(monkeypatch):
+    service = CompanyEnrichmentService()
+    monkeypatch.setattr(settings, "company_enrichment_enabled", True)
+    monkeypatch.setattr(settings, "company_enrichment_mode", "xah")
+    monkeypatch.setattr(settings, "xah_api_key", "test-key")
+    monkeypatch.setattr(settings, "company_xah_retry_attempts", 5)
+    monkeypatch.setattr(
+        service,
+        "_make_queries",
+        lambda *args: ["website chính thức Công ty ABC"],
+    )
+
+    urls = [f"https://candidate-{index}.example.com" for index in range(1, 6)]
+    search_calls = []
+    crawled = []
+
+    def search(queries):
+        url = urls[len(search_calls)]
+        search_calls.append(url)
+        return ([{"url": url, "title": "Công ty ABC", "snippet": ""}], [])
+
+    async def crawl(url):
+        crawled.append(url)
+        if url != urls[-1]:
+            raise RuntimeError(f"{url}: crawl failed")
+        return (
+            "URL: https://candidate-5.example.com/\n"
+            "Thông tin đầy đủ về Công ty ABC và công nghệ đang sử dụng",
+            [url],
+            [],
+        )
+
+    profile = complete_profile(urls[-1])
+    profile["official_url"] = urls[-1]
+    monkeypatch.setattr(service, "_search_queries", search)
+    monkeypatch.setattr(service, "_crawl_official_site", crawl)
+    monkeypatch.setattr(
+        "app.services.company_enrichment_service.ai_extractor._call_gemini_json",
+        lambda prompt: profile,
+    )
+
+    result = await service.enrich("Công ty ABC", "enterprise", None, None, "Hà Nội")
+
+    assert search_calls == urls
+    assert crawled == urls
+    assert result.status == "COMPLETE"
+    assert result.organization["official_url"] == "https://candidate-5.example.com/"
+    assert urls[-1] in result.source_urls
+
+
+@pytest.mark.asyncio
+async def test_xah_search_results_ignore_search_engine_urls(monkeypatch):
+    from app.services.company_enrichment_service import CompanyEnrichmentService
+
+    service = CompanyEnrichmentService()
+    monkeypatch.setattr(
+        "app.services.company_enrichment_service.xah_search_service.search",
+        lambda _query: {
+            "answer": "",
+            "results": [
+                {"url": "https://www.google.com/search?q=upbase", "title": "Google"},
+                {"url": "https://www.upbase.vn/vi", "title": "Upbase"},
+            ],
+        },
+    )
+
+    results, errors = service._search_queries(["website chính thức Upbase"])
+
+    assert errors == []
+    assert [item["url"] for item in results] == ["https://www.upbase.vn/vi"]

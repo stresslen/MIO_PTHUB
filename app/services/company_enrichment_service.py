@@ -20,7 +20,7 @@ from app.config import settings
 from app.crawlers.generic import GenericWebsiteAdapter
 from app.models.organization import Organization, OrganizationContact, OrganizationEvidence
 from app.pipeline.extract import AIAuthenticationError, AIQuotaOrAPIError, ai_extractor
-from app.pipeline.normalize import canonicalize_url, normalize_phone_numbers, normalize_unicode, utc_now
+from app.pipeline.normalize import clean_html, canonicalize_url, normalize_phone_numbers, normalize_unicode, utc_now
 from app.services.browser_crawl_service import browser_crawl_service
 from app.services.source_service import validate_public_url
 from app.services.priority_service import priority_coordinator
@@ -38,6 +38,11 @@ RELEVANT_PATH = re.compile(
     r"job|tender|dau-thau|procurement|annual|report|bao-cao|nang-luc)", re.I,
 )
 
+_SEARCH_ENGINE_HOSTS = {
+    "google.com", "bing.com", "yahoo.com", "search.yahoo.com",
+    "duckduckgo.com", "yandex.com", "baidu.com", "ecosia.org",
+}
+
 
 class CompanyEnrichmentResult(BaseModel):
     status: str
@@ -52,6 +57,11 @@ class CompanyEnrichmentResult(BaseModel):
 
 class CompanyEnrichmentService:
     # Verified round-two crawler. Every stored fact must carry a real URL.
+
+    @staticmethod
+    def _is_search_engine_url(url: str) -> bool:
+        host = (urlparse(canonicalize_url(url)).hostname or "").lower().removeprefix("www.")
+        return any(host == domain or host.endswith(f".{domain}") for domain in _SEARCH_ENGINE_HOSTS)
 
     @staticmethod
     def _root_url(url: str) -> str:
@@ -71,7 +81,7 @@ class CompanyEnrichmentService:
         return output
 
     @staticmethod
-    def _fetch_public_page(url: str, max_chars: int = 12000) -> dict[str, str]:
+    def _fetch_public_page(url: str) -> dict[str, str]:
         # Directly fetch an XAH result URL; redirects are validated one by one.
         current = canonicalize_url(url)
         for _ in range(4):
@@ -115,43 +125,52 @@ class CompanyEnrichmentService:
                 try:
                     from pypdf import PdfReader
                     reader = PdfReader(io.BytesIO(payload))
-                    text = normalize_unicode(" ".join((page.extract_text() or "") for page in reader.pages[:80]))[:max_chars]
+                    text = normalize_unicode(" ".join((page.extract_text() or "") for page in reader.pages))
                 except Exception as exc:
                     raise RuntimeError(f"Không đọc được PDF text; PDF scan cần OCR: {exc}") from exc
-                if len(text) < 40:
+                if not text.strip():
                     raise RuntimeError("PDF không có lớp text; cần OCR")
                 return {"url": current, "title": urlparse(current).path.rsplit("/", 1)[-1] or current, "text": text}
             encoding = response.encoding or response.apparent_encoding or "utf-8"
             soup = BeautifulSoup(payload.decode(encoding, errors="replace"), "html.parser")
-            for node in soup(["script", "style", "noscript", "template", "svg", "canvas", "form"]):
-                node.decompose()
             title_node = soup.find("title")
             title = normalize_unicode(title_node.get_text(" ", strip=True) if title_node else current)[:500]
-            content_node = soup.find("article") or soup.find("main") or soup.body or soup
-            text = normalize_unicode(content_node.get_text(" ", strip=True))[:max_chars]
-            if len(text) < 40:
-                raise RuntimeError("Trang không có đủ nội dung HTML tĩnh")
+            text = clean_html(str(soup.body or soup))
+            if not text.strip():
+                raise RuntimeError("Trang không có nội dung text")
             return {"url": current, "title": title, "text": text}
         raise RuntimeError("Quá nhiều redirect")
 
     @staticmethod
     def _query_prompt(name: str, tax_code: str | None, location: str | None, missing: list[str]) -> str:
-        return f'''Bạn chỉ tạo truy vấn tìm kiếm, không đoán URL hay dữ liệu.
-Tổ chức: {name}
-Mã số thuế: {tax_code or "không có"}
-Địa điểm: {location or "không có"}
-Thông tin cần tìm: {", ".join(missing) if missing else "website chính thức"}
-Trả duy nhất JSON: {{"queries":["2 đến 3 truy vấn tiếng Việt có tên tổ chức và loại thông tin cần tìm"]}}'''
+        return f'''Bạn chỉ tạo truy vấn để tìm URL WEBSITE CHÍNH THỨC của đúng tổ chức bên dưới.
+
+Tổ chức cần tìm: {name}
+Mã số thuế (nếu có): {tax_code or "không có"}
+Địa điểm (nếu có): {location or "không có"}
+
+Quy tắc bắt buộc:
+- Chỉ tìm trang chủ hoặc tên miền chính thức do chính tổ chức sở hữu/vận hành.
+- Không tìm và không yêu cầu URL của báo chí, blog, diễn đàn, danh bạ doanh nghiệp,
+  mạng xã hội, trang tuyển dụng, cổng đấu thầu, website văn bản pháp luật hoặc bên thứ ba.
+- Không tìm thông tin ngành, quy mô, doanh thu, dự án, tin tức, việc làm hay người liên hệ ở bước này.
+- Không đoán URL, không tự tạo tên miền và không trả về dữ liệu ngoài truy vấn.
+- Nếu tên tổ chức có nhiều kết quả, truy vấn phải phân biệt bằng mã số thuế và địa điểm.
+
+Trả duy nhất JSON đúng schema, chỉ có một truy vấn:
+{{"queries":["website chính thức {name}"]}}
+'''
 
     def _make_queries(self, name: str, tax_code: str | None, location: str | None, missing: list[str]) -> list[str]:
         data = ai_extractor._call_gemini_json(self._query_prompt(name, tax_code, location, missing))
         queries = [normalize_unicode(str(v))[:500] for v in data.get("queries") or [] if normalize_unicode(str(v))]
         if not queries:
             raise AIQuotaOrAPIError("Gemini không tạo được search query hợp lệ")
-        return self._dedupe(queries)[:max(1, settings.company_xah_max_queries)]
+        # Round two currently has one purpose only: discover the official site.
+        # Do not let Gemini fan out into news, jobs, tenders, legal databases, etc.
+        return self._dedupe(queries)[:1]
 
-    @staticmethod
-    def _search_queries(queries: list[str]) -> tuple[list[dict[str, Any]], list[str]]:
+    def _search_queries(self, queries: list[str]) -> tuple[list[dict[str, Any]], list[str]]:
         results, errors, seen = [], [], set()
         for query in queries:
             try:
@@ -159,7 +178,7 @@ Trả duy nhất JSON: {{"queries":["2 đến 3 truy vấn tiếng Việt có t�
                 for item in payload.get("results") or []:
                     url = canonicalize_url(str(item.get("url") or ""))
                     valid, _ = validate_public_url(url, resolve_dns=False)
-                    if not url or not valid or url in seen:
+                    if not url or not valid or self._is_search_engine_url(url) or url in seen:
                         continue
                     seen.add(url)
                     clean = dict(item)
@@ -175,7 +194,7 @@ Trả duy nhất JSON: {{"queries":["2 đến 3 truy vấn tiếng Việt có t�
         return results, errors
 
     async def _fetch_rendered_public_page(
-        self, url: str, max_chars: int = 12000
+        self, url: str
     ) -> dict[str, str]:
         current = canonicalize_url(url)
         valid, reason = await priority_coordinator.run_blocking(
@@ -204,10 +223,9 @@ Trả duy nhất JSON: {{"queries":["2 đến 3 truy vấn tiếng Việt có t�
         title = normalize_unicode(
             title_node.get_text(" ", strip=True) if title_node else page.url
         )[:500]
-        content_node = soup.find("article") or soup.find("main") or soup.body or soup
-        text = normalize_unicode(content_node.get_text(" ", strip=True))[:max_chars]
-        if len(text) < 40:
-            raise RuntimeError("Trang không có đủ nội dung sau khi render JavaScript")
+        text = clean_html(str(soup.body or soup))
+        if not text.strip():
+            raise RuntimeError("Trang không có nội dung sau khi render JavaScript")
         return {"url": page.url, "title": title, "text": text}
 
     async def _load_search_urls(self, results: list[dict[str, Any]]) -> tuple[list[dict[str, str]], list[str]]:
@@ -224,22 +242,164 @@ Trả duy nhất JSON: {{"queries":["2 đến 3 truy vấn tiếng Việt có t�
                     )
                 else:
                     page = await self._fetch_rendered_public_page(url)
+                page = dict(page)
+                page["source_url"] = url
                 pages.append(page)
             except Exception as exc:
                 errors.append(f"{item['url']}: {exc}")
         return pages, errors
 
+    async def _search_and_load_with_retries(
+        self, queries: list[str]
+    ) -> tuple[list[dict[str, Any]], list[dict[str, str]], list[str], list[str], int]:
+        """Retry XAH discovery when every candidate URL fails backend crawling."""
+        configured_attempts = getattr(settings, "company_xah_retry_attempts", 5) or 5
+        try:
+            max_attempts = max(1, min(int(configured_attempts), 5))
+        except (TypeError, ValueError):
+            max_attempts = 5
+
+        all_results: list[dict[str, Any]] = []
+        all_pages: list[dict[str, str]] = []
+        search_errors: list[str] = []
+        fetch_errors: list[str] = []
+        attempted_urls: set[str] = set()
+        attempts_used = 0
+
+        for attempt in range(1, max_attempts + 1):
+            attempts_used = attempt
+            try:
+                found_results, errors = await priority_coordinator.run_blocking(
+                    self._search_queries,
+                    queries,
+                    worker_name=f"Company XAH search attempt {attempt}/{max_attempts}",
+                )
+                search_errors.extend(errors)
+            except Exception as exc:
+                found_results = []
+                search_errors.append(f"Lần XAH {attempt}/{max_attempts}: {exc}")
+
+            fresh_results: list[dict[str, Any]] = []
+            for item in found_results or []:
+                url = canonicalize_url(str(item.get("url") or ""))
+                if not url or url in attempted_urls:
+                    continue
+                attempted_urls.add(url)
+                clean_item = dict(item)
+                clean_item["url"] = url
+                fresh_results.append(clean_item)
+            all_results.extend(fresh_results)
+
+            if not fresh_results:
+                continue
+
+            try:
+                loaded_pages: Any = self._load_search_urls(fresh_results)
+                if inspect.isawaitable(loaded_pages):
+                    loaded_pages = await loaded_pages
+                pages, errors = loaded_pages
+                all_pages.extend(pages or [])
+                fetch_errors.extend(errors or [])
+            except Exception as exc:
+                fetch_errors.append(f"Lần crawl XAH {attempt}/{max_attempts}: {exc}")
+
+            if all_pages:
+                break
+
+            logger.warning(
+                "[company_enrichment] XAH attempt %s/%s không crawl được URL; sẽ thử lại",
+                attempt,
+                max_attempts,
+            )
+
+        return all_results, all_pages, search_errors, fetch_errors, attempts_used
+
+    async def _search_and_crawl_official_with_retries(
+        self, queries: list[str]
+    ) -> tuple[list[dict[str, Any]], str, list[str], list[str], int]:
+        """Find an official URL with XAH, then crawl its same-domain site deeply."""
+        configured_attempts = getattr(settings, "company_xah_retry_attempts", 5) or 5
+        try:
+            max_attempts = max(1, min(int(configured_attempts), 5))
+        except (TypeError, ValueError):
+            max_attempts = 5
+
+        all_results: list[dict[str, Any]] = []
+        all_crawled_urls: list[str] = []
+        search_errors: list[str] = []
+        crawl_errors: list[str] = []
+        attempted_urls: set[str] = set()
+
+        for attempt in range(1, max_attempts + 1):
+            try:
+                found_results, errors = await priority_coordinator.run_blocking(
+                    self._search_queries,
+                    queries,
+                    worker_name=f"Company XAH search attempt {attempt}/{max_attempts}",
+                )
+                search_errors.extend(errors)
+            except Exception as exc:
+                found_results = []
+                search_errors.append(f"Lần XAH {attempt}/{max_attempts}: {exc}")
+
+            fresh_results: list[dict[str, Any]] = []
+            for item in found_results or []:
+                url = canonicalize_url(str(item.get("url") or ""))
+                if not url or url in attempted_urls:
+                    continue
+                attempted_urls.add(url)
+                clean_item = dict(item)
+                clean_item["url"] = url
+                fresh_results.append(clean_item)
+
+            all_results.extend(fresh_results)
+
+            for item in fresh_results:
+                try:
+                    website_context, crawled_urls, notes = await self._crawl_official_site(
+                        item["url"]
+                    )
+                    if crawled_urls:
+                        all_crawled_urls.extend(crawled_urls)
+                        return (
+                            all_results,
+                            website_context,
+                            self._dedupe(all_crawled_urls),
+                            self._dedupe([*search_errors, *crawl_errors, *notes]),
+                            attempt,
+                        )
+                except Exception as exc:
+                    crawl_errors.append(f"{item['url']}: {exc}")
+
+            logger.warning(
+                "[company_enrichment] XAH attempt %s/%s không crawl được website chính thức; sẽ thử lại",
+                attempt,
+                max_attempts,
+            )
+
+        return (
+            all_results,
+            "",
+            self._dedupe(all_crawled_urls),
+            self._dedupe([*search_errors, *crawl_errors]),
+            max_attempts,
+        )
+
     @staticmethod
     def _candidate_context(results: list[dict[str, Any]], pages: list[dict[str, str]]) -> str:
-        page_map = {item["url"]: item for item in pages}
+        page_map = {}
+        for page in pages:
+            for key in (page.get("source_url"), page.get("url")):
+                if key:
+                    page_map[canonicalize_url(key)] = page
         blocks = []
         for index, item in enumerate(results, 1):
-            page = page_map.get(item["url"], {})
+            page = page_map.get(canonicalize_url(item["url"]), {})
             blocks.append(f'''[URL {index}]
 URL: {item["url"]}
 Tiêu đề: {item.get("title") or ""}
 Đoạn XAH: {item.get("snippet") or ""}
-Nội dung backend tải: {page.get("text", "(không tải được)")[:6000]}''')
+Nội dung backend tải: {page.get("text", "(không tải được)")}''')
         return "\n\n".join(blocks)
 
     @staticmethod
@@ -264,15 +424,17 @@ Tiêu đề: {item.get("title") or ""}
 Ngày đăng: {item.get("published_at") or "không có"}''')
         return "\n\n".join([*query_blocks, *result_blocks])
 
-    def _enrich_from_xah(
+    async def _enrich_from_xah(
         self,
         name: str,
         organization_type: str | None,
         tax_code: str | None,
         location: str | None,
         notes: list[str],
+        round_one_context: str = "",
     ) -> CompanyEnrichmentResult:
-        # No round-one URL: let XAH search/crawl by Gemini-generated keywords.
+        # No round-one URL: Gemini creates one official-site query, XAH finds a
+        # candidate seed, then the same-domain crawler discovers and reads pages.
         if settings.company_enrichment_mode != "xah":
             return CompanyEnrichmentResult(
                 status="WEBSITE_NOT_FOUND",
@@ -280,10 +442,14 @@ Ngày đăng: {item.get("published_at") or "không có"}''')
                 missing_information=["official_url"],
             )
         if not settings.xah_api_key:
+            profile, _, _, missing = self._normalize_profile({"legal_name": name}, name, "", [])
+            profile.update(organization_type=organization_type, verification_confidence=0.0)
             return CompanyEnrichmentResult(
-                status="DISCOVERY_FAILED",
+                status="PROFILE_INCOMPLETE",
                 message="Chưa cấu hình XAH_API_KEY",
-                missing_information=["official_url"],
+                organization=profile,
+                missing_information=missing,
+                xah_used=False,
             )
 
         targets = [
@@ -292,36 +458,69 @@ Ngày đăng: {item.get("published_at") or "không có"}''')
             "tenders", "contacts", "decision_makers",
         ]
         try:
-            queries = self._make_queries(name, tax_code, location, targets)
-            results, search_errors = self._search_queries(queries)
-        except Exception as exc:
-            return CompanyEnrichmentResult(
-                status="DISCOVERY_FAILED",
-                message=str(exc),
-                missing_information=targets,
-                xah_used=False,
+            queries = await priority_coordinator.run_blocking(
+                self._make_queries,
+                name,
+                tax_code,
+                location,
+                targets,
+                worker_name="Company XAH query generation",
             )
-        if not results:
-            messages = self._dedupe([*notes, *search_errors, "XAH không trả dữ liệu có URL nguồn"])
+            results, website_context, crawled_urls, crawl_errors, attempts_used = (
+                await self._search_and_crawl_official_with_retries(queries)
+            )
+        except Exception as exc:
+            results, website_context, crawled_urls = [], "", []
+            crawl_errors, attempts_used = [str(exc)], 0
+
+        source_urls = self._dedupe(
+            [item["url"] for item in results] + crawled_urls
+        )
+        logger.info(
+            "[company_enrichment] XAH trả %s URL, website crawl được %s trang cho %s sau %s lần thử",
+            len(results),
+            len(crawled_urls),
+            name,
+            attempts_used,
+        )
+        if not crawled_urls:
+            profile, _, _, missing = self._normalize_profile(
+                {"legal_name": name}, name, "", []
+            )
+            profile.update(
+                organization_type=organization_type,
+                verification_confidence=0.0,
+            )
+            messages = self._dedupe([
+                *notes,
+                *crawl_errors,
+                f"Đã thử XAH tối đa {attempts_used or 0} lần nhưng không crawl được website chính thức; bỏ qua enrichment bổ sung",
+            ])
             return CompanyEnrichmentResult(
-                status="DISCOVERY_FAILED",
+                status="PROFILE_INCOMPLETE",
                 message="; ".join(messages),
-                missing_information=targets,
+                organization=profile,
+                missing_information=self._dedupe(["official_url", *missing]),
+                source_urls=source_urls,
                 xah_used=True,
             )
 
-        source_urls = self._dedupe([item["url"] for item in results])
+        official_url = self._root_url(crawled_urls[0])
         try:
-            data = ai_extractor._call_gemini_json(self._profile_prompt(
-                name,
-                organization_type,
-                tax_code,
-                "",
-                "",
-                self._xah_context(results),
-            ))
+            data = await priority_coordinator.run_blocking(
+                ai_extractor._call_gemini_json,
+                self._profile_prompt(
+                    name,
+                    organization_type,
+                    tax_code,
+                    official_url,
+                    website_context,
+                    round_one_context=round_one_context,
+                ),
+                worker_name="Company crawled profile Gemini extraction",
+            )
         except Exception as exc:
-            messages = self._dedupe([*notes, *search_errors, str(exc)])
+            messages = self._dedupe([*notes, *crawl_errors, str(exc)])
             return CompanyEnrichmentResult(
                 status="AI_EXTRACTION_FAILED",
                 message="; ".join(messages),
@@ -331,17 +530,18 @@ Ngày đăng: {item.get("published_at") or "không có"}''')
             )
 
         profile, contacts, evidence, missing = self._normalize_profile(
-            data, name, "", source_urls
+            data, name, official_url, source_urls
         )
         profile.update(
             organization_type=organization_type,
-            verification_confidence=0.0,
+            verification_confidence=1.0,
         )
         status = "COMPLETE" if not missing else "PROFILE_INCOMPLETE"
-        messages = self._dedupe([*notes, *search_errors])
+        messages = self._dedupe([*notes, *crawl_errors])
         logger.info(
-            "[company_enrichment] Hoàn tất %s bằng XAH trực tiếp với trạng thái %s",
+            "[company_enrichment] Hoàn tất %s bằng website chính thức %s trang; trạng thái %s",
             name,
+            len(crawled_urls),
             status,
         )
         return CompanyEnrichmentResult(
@@ -364,16 +564,13 @@ Ngày đăng: {item.get("published_at") or "không có"}''')
             "rate_limit_delay": max(0.2, settings.default_rate_limit_delay),
             "timeout": min(settings.crawl_timeout_seconds, 30),
         })
-        adapter.max_pages = max(1, min(settings.company_profile_max_pages, 100))
-        adapter.max_depth = max(1, min(settings.company_profile_max_depth, 3))
+        adapter.max_pages = max(1, min(settings.company_profile_max_pages, 20))
+        adapter.max_depth = 3
         urls = await adapter.discover(max_items=adapter.max_pages)
         urls.sort(key=lambda v: (0 if RELEVANT_PATH.search(urlparse(v).path) else 1, len(v)))
         blocks, used, errors, pdf_urls = [], [], [], []
-        remaining = max(10000, settings.company_profile_context_chars)
         official_host = (urlparse(official_url).hostname or "").lower().removeprefix("www.")
         for url in urls:
-            if remaining <= 0:
-                break
             try:
                 raw_document = await adapter.fetch(url)
                 soup = BeautifulSoup(raw_document.html, "html.parser")
@@ -383,27 +580,23 @@ Ngày đăng: {item.get("published_at") or "không có"}''')
                     if candidate.lower().split("?", 1)[0].endswith(".pdf") and candidate_host == official_host and candidate not in pdf_urls:
                         pdf_urls.append(candidate)
                 parsed = await adapter.parse(raw_document)
-                excerpt = parsed.raw_content[:min(3000, remaining)]
-                if len(excerpt) < 80:
+                # Pass the complete normalized page text to the profile LLM.
+                excerpt = parsed.raw_content
+                if not excerpt.strip():
                     continue
                 blocks.append(f"URL: {url}\nTiêu đề: {parsed.title}\nNội dung: {excerpt}")
                 used.append(url)
-                remaining -= len(excerpt)
             except Exception as exc:
                 errors.append(f"{url}: {exc}")
-        for pdf_url in pdf_urls[:10]:
-            if remaining <= 0:
-                break
+        for pdf_url in pdf_urls:
             try:
                 page = await priority_coordinator.run_blocking(
                     self._fetch_public_page,
                     pdf_url,
-                    min(12000, remaining),
                     worker_name="Company profile PDF fetch",
                 )
                 blocks.append(f"URL: {page['url']}\nTiêu đề: {page['title']}\nNội dung PDF: {page['text']}")
                 used.append(page["url"])
-                remaining -= len(page["text"])
             except Exception as exc:
                 errors.append(f"{pdf_url}: {exc}")
         if not blocks:
@@ -412,18 +605,24 @@ Ngày đăng: {item.get("published_at") or "không có"}''')
 
     @staticmethod
     def _profile_prompt(name: str, org_type: str | None, tax_code: str | None, official_url: str,
-                        website_context: str, supplemental_context: str = "") -> str:
-        supplemental = f"\nKẾT QUẢ XAH SEARCH CÓ URL NGUỒN:\n{supplemental_context}" if supplemental_context else ""
-        return f'''Bạn trích xuất Company Profile có kiểm chứng, chỉ dùng nội dung và URL trong prompt.
+                        website_context: str, supplemental_context: str = "",
+                        round_one_context: str = "") -> str:
+        supplemental = f"\nKẾT QUẢ CRAWL BỔ SUNG CÓ URL NGUỒN:\n{supplemental_context}" if supplemental_context else ""
+        round_one = round_one_context or "(không có dữ liệu vòng 1)"
+        return f'''Bạn tạo một Company Profile cuối cùng bằng cách hợp nhất dữ liệu vòng 1 và dữ liệu crawl bổ sung.
+	Không trả về báo cáo riêng cho từng vòng; chỉ trả về một JSON kết quả cuối cùng.
 Tổ chức vòng 1: {name}
 Loại tổ chức: {org_type or "chưa rõ"}
 Mã số thuế vòng 1: {tax_code or "chưa có"}
 Website từ vòng 1: {official_url or "không có"}
+DỮ LIỆU ĐÃ TRÍCH XUẤT Ở VÒNG 1:
+{round_one}
 DỮ LIỆU CRAWL WEBSITE CHÍNH THỨC:
-{website_context or "(không chạy vì vòng 1 không có URL)"}
+{website_context or "(không có website chính thức)"}
 {supplemental}
 Quy tắc tuyệt đối:
 - Không tạo tên người, chức danh, email, điện thoại, doanh thu, công nghệ hay dự án.
+- Bắt buộc đọc cả header, footer, nav, aside, form và các marker `[Email: ...]`, `[SĐT: ...]`; nếu có email/SĐT công khai nhưng không có tên cá nhân, vẫn trả một contact cấp tổ chức với `full_name: null`, `raw_title` mô tả như `Hotline` hoặc `Văn phòng`, `role_group: "other"`.
 - Không suy diễn email theo mẫu. Không có bằng chứng thì null hoặc [].
 - Mỗi contact và dữ liệu quan trọng phải có source_url thật xuất hiện trong prompt và evidence_text trực tiếp.
 - official_url chỉ được lấy từ một URL xuất hiện nguyên văn trong prompt; không có bằng chứng thì null.
@@ -509,7 +708,7 @@ Trả duy nhất JSON:
 
     async def enrich(self, organization_name: str | None, organization_type: str | None,
                      organization_website: str | None, organization_tax_code: str | None,
-                     location: str | None) -> CompanyEnrichmentResult:
+                     location: str | None, round_one_context: str = "") -> CompanyEnrichmentResult:
         if not settings.company_enrichment_enabled:
             return CompanyEnrichmentResult(status="DISABLED", message="Crawl vòng 2 đang tắt")
         name = normalize_unicode(str(organization_name or ""))
@@ -519,6 +718,9 @@ Trả duy nhất JSON:
         logger.info("[company_enrichment] Bắt đầu vòng 2 cho tổ chức: %s", name)
         official_url = canonicalize_url(str(organization_website or ""))
         confidence, notes, xah_used = 0.0, [], False
+        if official_url and self._is_search_engine_url(official_url):
+            notes.append("URL vòng 1 là trang công cụ tìm kiếm, không phải website chính thức")
+            official_url = ""
         if official_url:
             valid, reason = await priority_coordinator.run_blocking(
                 validate_public_url,
@@ -535,14 +737,13 @@ Trả duy nhất JSON:
                 "[company_enrichment] Gemini vòng 1 không cung cấp URL; chuyển keyword sang XAH cho %s",
                 name,
             )
-            return await priority_coordinator.run_blocking(
-                self._enrich_from_xah,
+            return await self._enrich_from_xah(
                 name,
                 organization_type,
                 organization_tax_code,
                 location,
                 notes,
-                worker_name="Company XAH enrichment",
+                round_one_context,
             )
 
         logger.info("[company_enrichment] Website chính thức đã xác minh: %s (confidence=%.2f)", official_url, confidence)
@@ -561,7 +762,8 @@ Trả duy nhất JSON:
                 initial_data = await priority_coordinator.run_blocking(
                     ai_extractor._call_gemini_json,
                     self._profile_prompt(
-                        name, organization_type, organization_tax_code, official_url, website_context
+                        name, organization_type, organization_tax_code, official_url, website_context,
+                        round_one_context=round_one_context,
                     ),
                     worker_name="Company profile Gemini extraction",
                 )
@@ -579,23 +781,24 @@ Trả duy nhất JSON:
             else:
                 try:
                     queries = self._make_queries(name, organization_tax_code, location, missing)
-                    results, search_errors = await priority_coordinator.run_blocking(
-                        self._search_queries, queries, worker_name="Company XAH search"
+                    results, pages, search_errors, fetch_errors, attempts_used = (
+                        await self._search_and_load_with_retries(queries)
                     )
-                    loaded_pages = self._load_search_urls(results)
-                    if inspect.isawaitable(loaded_pages):
-                        loaded_pages = await loaded_pages
-                    pages, fetch_errors = loaded_pages
                     all_urls.extend(item["url"] for item in results)
                     all_urls.extend(item["url"] for item in pages)
-                    if not results:
-                        supplemental_error = "; ".join(search_errors) or "XAH không trả URL bổ sung"
+                    if not pages:
+                        supplemental_error = "; ".join(self._dedupe([
+                            *search_errors,
+                            *fetch_errors,
+                            f"Đã thử XAH {attempts_used} lần nhưng không crawl được URL; bỏ qua enrichment bổ sung",
+                        ]))
                     else:
                         final_data = await priority_coordinator.run_blocking(
                             ai_extractor._call_gemini_json,
                             self._profile_prompt(
                                 name, organization_type, organization_tax_code, official_url, website_context,
                                 self._candidate_context(results, pages),
+                                round_one_context=round_one_context,
                             ),
                             worker_name="Company supplemental Gemini extraction",
                         )
